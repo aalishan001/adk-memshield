@@ -4,7 +4,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/adk-memshield)](https://pypi.org/project/adk-memshield/)
 [![Python](https://img.shields.io/pypi/pyversions/adk-memshield)](https://pypi.org/project/adk-memshield/)
-[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/aalishan001/adk-memshield/blob/main/LICENSE)
 [![CI](https://github.com/aalishan001/adk-memshield/actions/workflows/ci.yml/badge.svg)](https://github.com/aalishan001/adk-memshield/actions/workflows/ci.yml)
 [![Google ADK](https://img.shields.io/badge/google--adk-%3E%3D2.12-4285F4.svg)](https://github.com/google/adk-python)
 
@@ -52,7 +52,7 @@ flowchart LR
 
 ### Security properties
 
-- **No superuser bypass.** Superusers and `BYPASSRLS` roles ignore RLS even under `FORCE ROW LEVEL SECURITY`. [`sql/01_schema.sql`](./sql/01_schema.sql) creates a least-privilege `memshield_app` role (`NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS`); connect with it.
+- **No superuser bypass.** Superusers and `BYPASSRLS` roles ignore RLS even under `FORCE ROW LEVEL SECURITY`. [`sql/01_schema.sql`](https://github.com/aalishan001/adk-memshield/blob/main/sql/01_schema.sql) creates a least-privilege `memshield_app` role (`NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS`); connect with it.
 - **Pool-safe identity.** Every operation runs in an explicit transaction and binds `app.current_app_name`, `app.current_tenant_id`, `app.current_user_id` and `app.agent_clearance` with `set_config(..., true)`. The settings vanish at commit/rollback, so identity never bleeds into the next pooled checkout. All values are bound parameters; the only interpolated identifier (`table_name`) is validated against `^[A-Za-z_][A-Za-z0-9_]*$`.
 - **Fail-closed.** Without identity context a query sees 0 rows. Identity columns carry `CHECK (<col> <> '')` because a pooled connection reports `''` (not `NULL`) for a custom setting once it has been used, and the service rejects empty `app_name`/`user_id` before touching the database.
 - **All four commands are gated.** `SELECT` allows own rows plus `tenant_shared` rows with `min_clearance <= app.agent_clearance`. `INSERT` and `UPDATE` (`USING` + `WITH CHECK`) and `DELETE` (`USING`) are restricted to the caller's own rows, so cross-user poisoning or re-owning a row raises `InsufficientPrivilege`.
@@ -65,7 +65,7 @@ flowchart LR
 
 ## Benchmark: unprotected `pgvector` vs. `adk-memshield`
 
-[`benchmarks/run_memleak_eval.py`](./benchmarks/run_memleak_eval.py) seeds a synthetic enterprise corpus (**3 tenants, 6 users, 60 memories**: API credentials, compensation, medical/HR records, query-shaped lure memories, and L3/L4 executive memos) into an ordinary table and into the RLS table. Each scenario runs **the same buggy application-layer SQL** against both, inside the same transaction-local identity of the authenticated caller, so the only variable is whether the database enforces ownership. `top_k=3`, 75 queries, 5 repeats.
+[`benchmarks/run_memleak_eval.py`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/run_memleak_eval.py) seeds a synthetic enterprise corpus (**3 tenants, 6 users, 60 memories**: API credentials, compensation, medical/HR records, query-shaped lure memories, and L3/L4 executive memos) into an ordinary table and into the RLS table. Each scenario runs **the same buggy application-layer SQL** against both, inside the same transaction-local identity of the authenticated caller, so the only variable is whether the database enforces ownership. `top_k=3`, 75 queries, 5 repeats.
 
 | Scenario | Application-layer mistake | Queries | Unprotected: queries leaking | Unprotected: leaked share of top-k rows | Unprotected: leak at rank 1 | `adk-memshield`: queries leaking | Unprotected clean recall | `adk-memshield` clean recall |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -129,7 +129,7 @@ pip install -e ".[dev]"
 
 ### 1. Apply the schema
 
-Apply [`sql/01_schema.sql`](./sql/01_schema.sql) as a superuser/owner, then rotate the `memshield_app` password. The file also ships inside the wheel:
+Apply [`sql/01_schema.sql`](https://github.com/aalishan001/adk-memshield/blob/main/sql/01_schema.sql) as a superuser/owner, then rotate the `memshield_app` password. The file also ships inside the wheel:
 
 ```python
 from importlib.resources import files
@@ -249,4 +249,4 @@ docker compose -p adk-memshield run --rm test python benchmarks/run_memleak_eval
 
 ## License
 
-Apache License 2.0 — see [`LICENSE`](./LICENSE).
+Apache License 2.0 — see [`LICENSE`](https://github.com/aalishan001/adk-memshield/blob/main/LICENSE).

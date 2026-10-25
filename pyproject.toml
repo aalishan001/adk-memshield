@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "adk-memshield"
-version = "0.1.0"
+version = "0.1.1"
 description = "Zero-trust multi-tenant semantic memory service for Google ADK backed by PostgreSQL pgvector and Row-Level Security (RLS)."
 readme = "README.md"
 license = "Apache-2.0"
@@ -48,6 +48,7 @@ dependencies = [
 Homepage = "https://github.com/aalishan001/adk-memshield"
 Repository = "https://github.com/aalishan001/adk-memshield"
 Issues = "https://github.com/aalishan001/adk-memshield/issues"
+Changelog = "https://github.com/aalishan001/adk-memshield/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [
