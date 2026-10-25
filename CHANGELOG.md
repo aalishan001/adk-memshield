@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- `requires-python` is now `>=3.11`. The 0.1.0 metadata declared `>=3.10`, but its `google-adk>=2.12` dependency requires Python 3.11+, so installs on Python 3.10 fail to resolve.
+
 ## [0.1.0] - 2026-10-22
 
 ### Added

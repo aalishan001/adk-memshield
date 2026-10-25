@@ -4,7 +4,7 @@ Thanks for helping improve adk-memshield. Bug reports, policy hardening and new 
 
 ## Development setup
 
-You need Python 3.10+ and PostgreSQL 16 with `pgvector`. The tests and benchmark expect the database on `localhost:54329`.
+You need Python 3.11+ and PostgreSQL 16 with `pgvector`. The tests and benchmark expect the database on `localhost:54329`.
 
 ```bash
 git clone https://github.com/aalishan001/adk-memshield.git
