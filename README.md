@@ -2,8 +2,10 @@
 
 **Zero-trust multi-tenant semantic memory for Google ADK (`google-adk`), enforced in the database by PostgreSQL `pgvector` + Row-Level Security (RLS).**
 
+[![PyPI](https://img.shields.io/pypi/v/adk-memshield)](https://pypi.org/project/adk-memshield/)
+[![Python](https://img.shields.io/pypi/pyversions/adk-memshield)](https://pypi.org/project/adk-memshield/)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](./pyproject.toml)
+[![CI](https://github.com/aalishan001/adk-memshield/actions/workflows/ci.yml/badge.svg)](https://github.com/aalishan001/adk-memshield/actions/workflows/ci.yml)
 [![Google ADK](https://img.shields.io/badge/google--adk-%3E%3D2.12-4285F4.svg)](https://github.com/google/adk-python)
 
 ---
@@ -16,6 +18,10 @@ Multi-tenant and multi-agent `google-adk` deployments often keep long-term seman
 2. **Lateral leakage inside agent swarms** — *AgentLeak* ([arXiv:2602.11510](https://arxiv.org/abs/2602.11510)) shows that internal channels between agents are a major leakage path. `adk-memshield` addresses the memory-retrieval slice of that problem: a low-clearance sub-agent must not retrieve shared tenant memories labelled above its clearance.
 
 `adk-memshield` is a drop-in `BaseMemoryService` that moves ownership gating out of application code and into PostgreSQL itself, using **`FORCE ROW LEVEL SECURITY`** and **transaction-local identity (`set_config(..., true)`)**. A retrieval query with a missing or wrong filter returns fewer rows, not someone else's rows.
+
+![adk-leak-arena console: the same no-WHERE query leaks cross-tenant rows from an unprotected table and returns only the caller's rows from adk-memshield](https://raw.githubusercontent.com/aalishan001/adk-leak-arena/main/docs/assets/console-overview.png)
+
+*Live side-by-side comparison in the companion red-team console, [adk-leak-arena](https://github.com/aalishan001/adk-leak-arena) (`pip install adk-leak-arena`).*
 
 ---
 

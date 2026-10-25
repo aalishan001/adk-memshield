@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_admin_pass
+          POSTGRES_DB: memshield
+        ports:
+          - 54329:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d memshield"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      MEMSHIELD_DB_DSN: postgresql://memshield_app:memshield_pass@localhost:54329/memshield
+      MEMSHIELD_ADMIN_DSN: postgresql://postgres:postgres_admin_pass@localhost:54329/memshield
+      FASTEMBED_CACHE_PATH: /home/runner/.cache/fastembed
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Cache FastEmbed model
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/.cache/fastembed
+          key: fastembed-bge-small-en-v1.5
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Apply schema
+        run: |
+          psql "$MEMSHIELD_ADMIN_DSN" -v ON_ERROR_STOP=1 -f sql/01_schema.sql
+          psql "$MEMSHIELD_ADMIN_DSN" -v ON_ERROR_STOP=1 -f sql/02_benchmark_baseline.sql
+
+      - name: Test suite
+        run: pytest -v
+
+      - name: Benchmark
+        run: python benchmarks/run_memleak_eval.py
