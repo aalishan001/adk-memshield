@@ -65,6 +65,8 @@ flowchart LR
 
 ## Benchmark: unprotected `pgvector` vs. `adk-memshield`
 
+> **Provenance:** this repo's 8/8 integration tests and the adk-leak-arena headline numbers (97.5% to 0.0% cross-boundary leak rate, 86.4% to 100.0% Recall@3, 54 queries, the 2,000-row query plans) are re-run, with commands, commits, environment and raw output, in [adk-leak-arena/BENCHMARKS.md](https://github.com/aalishan001/adk-leak-arena/blob/main/BENCHMARKS.md). The table below comes from this repo's own `run_memleak_eval.py` (a different dataset and query set) and is not re-verified there.
+
 [`benchmarks/run_memleak_eval.py`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/run_memleak_eval.py) seeds a synthetic enterprise corpus (**3 tenants, 6 users, 60 memories**: API credentials, compensation, medical/HR records, query-shaped lure memories, and L3/L4 executive memos) into an ordinary table and into the RLS table. Each scenario runs **the same buggy application-layer SQL** against both, inside the same transaction-local identity of the authenticated caller, so the only variable is whether the database enforces ownership. `top_k=3`, 75 queries, 5 repeats.
 
 | Scenario | Application-layer mistake | Queries | Unprotected: queries leaking | Unprotected: leaked share of top-k rows | Unprotected: leak at rank 1 | `adk-memshield`: queries leaking | Unprotected clean recall | `adk-memshield` clean recall |
