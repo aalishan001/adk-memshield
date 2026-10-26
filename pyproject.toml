@@ -15,14 +15,18 @@ authors = [
 ]
 keywords = [
     "google-adk",
-    "agents",
+    "adk",
+    "ai-agents",
+    "agent-memory",
     "memory",
-    "pgvector",
-    "postgresql",
-    "row-level-security",
     "multi-tenant",
+    "data-isolation",
+    "row-level-security",
+    "rls",
+    "postgresql",
+    "pgvector",
+    "vector-database",
     "ai-security",
-    "memleak"
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -33,9 +37,11 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: SQL",
     "Topic :: Database",
     "Topic :: Security",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
     "google-adk>=2.12.0,<3",

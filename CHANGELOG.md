@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- PyPI keywords now describe the project (`adk`, `ai-agents`, `agent-memory`, `data-isolation`, `rls`, `vector-database`, ...); `agents` and `memleak` are dropped.
+- Added the `Programming Language :: SQL` and `Topic :: Software Development :: Libraries :: Python Modules` classifiers.
+
 ## [0.1.1] - 2026-10-25
 
 ### Fixed
