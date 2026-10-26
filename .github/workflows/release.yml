@@ -65,13 +65,18 @@ jobs:
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           python - <<'PY'
-          import os, tomllib, urllib.error, urllib.request
+          import os, re, tomllib, urllib.error, urllib.request
 
           project = tomllib.load(open("pyproject.toml", "rb"))["project"]
           name, version = project["name"], project["version"]
           tag = os.environ["TAG"]
           if tag != f"v{version}":
               raise SystemExit(f"::error::tag {tag} does not match pyproject version {version}")
+          init = f"src/{name.replace('-', '_')}/__init__.py"
+          if os.path.exists(init):
+              found = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', open(init).read(), re.M)
+              if found and found.group(1) != version:
+                  raise SystemExit(f"::error::{init} says {found.group(1)}, pyproject says {version}")
           try:
               urllib.request.urlopen(f"https://pypi.org/pypi/{name}/{version}/json", timeout=30)
               on_pypi = "true"
