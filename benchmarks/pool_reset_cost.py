@@ -61,7 +61,7 @@ def main() -> int:
 
     print("| Pool | Checkouts | mean ms | p50 ms | p95 ms |")
     print("| :--- | ---: | ---: | ---: | ---: |")
-    print(row("reset=reset_connection (RESET ALL)", a))
+    print(row("reset=reset_connection (RESET ALL; RESET ROLE; DISCARD TEMP)", a))
     print(row("no reset callback", b))
     print()
     print(f"Mean added per checkout: {statistics.mean(a) - statistics.mean(b):.3f} ms "

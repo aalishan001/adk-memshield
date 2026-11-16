@@ -1,7 +1,7 @@
 $ docker compose -p adk-memshield run --rm test python benchmarks/pool_reset_cost.py --checkouts 2000
 | Pool | Checkouts | mean ms | p50 ms | p95 ms |
 | :--- | ---: | ---: | ---: | ---: |
-| reset=reset_connection (RESET ALL) | 2000 | 0.833 | 0.796 | 1.127 |
-| no reset callback | 2000 | 0.358 | 0.332 | 0.512 |
+| reset=reset_connection (RESET ALL; RESET ROLE; DISCARD TEMP) | 2000 | 1.012 | 0.992 | 1.350 |
+| no reset callback | 2000 | 0.430 | 0.412 | 0.626 |
 
-Mean added per checkout: 0.475 ms (the reset runs after the connection is returned; this includes the time the next checkout waits for it on a one-connection pool)
+Mean added per checkout: 0.582 ms (the reset runs after the connection is returned; this includes the time the next checkout waits for it on a one-connection pool)

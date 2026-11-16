@@ -1,4 +1,4 @@
-$ docker compose -p adk-memshield run --rm test python benchmarks/plan_cache_hnsw.py --rows 100000 --repeats 4 --reuse   # database created by an identical run with --keep (load 67.6 s, HNSW build 28.4 s)
+$ docker compose -p adk-memshield run --rm test python benchmarks/plan_cache_hnsw.py --rows 100000 --repeats 4   # PostgreSQL 16
 # Plan cache + HNSW + RLS benchmark
 postgres: 16.15 (Debian 16.15-1.pgdg12+2)
 pgvector: 0.8.7
@@ -11,32 +11,34 @@ top_k: 10
 distinct_queries: 5
 repeats_per_query: 4
 pool: psycopg_pool.ConnectionPool(min_size=1, max_size=1), psycopg prepare_threshold=5
+load_s: 72.5
+hnsw_build_s: 37.8
 
 | Query shape | memshield | User | hnsw.iterative_scan | Searches | Empty | Recall@10 | p50 ms | p95 ms |
 | :--- | :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: |
-| default search | 0.1.x auto | light | off | 20 | 0 | 1.00 | 31.7 | 38.7 |
-| default search | 0.2.0 force_custom_plan | light | off | 20 | 0 | 1.00 | 31.7 | 34.7 |
-| default search | 0.1.x auto | heavy | off | 20 | 0 | 0.84 | 3.3 | 5.5 |
-| default search | 0.2.0 force_custom_plan | heavy | off | 20 | 0 | 0.84 | 2.6 | 3.7 |
-| RLS only | 0.1.x auto | light | off | 20 | 10 | 0.50 | 21.4 | 46.8 |
-| RLS only | 0.2.0 force_custom_plan | light | off | 20 | 0 | 1.00 | 40.1 | 43.2 |
-| RLS only | 0.1.x auto | heavy | off | 20 | 0 | 0.84 | 2.5 | 6.1 |
-| RLS only | 0.2.0 force_custom_plan | heavy | off | 20 | 0 | 0.84 | 2.6 | 3.2 |
-| RLS only | 0.1.x auto | light | relaxed_order | 20 | 0 | 0.82 | 65.2 | 107.9 |
-| RLS only | 0.2.0 force_custom_plan | light | relaxed_order | 20 | 0 | 1.00 | 42.2 | 45.9 |
-| RLS only | 0.1.x auto | heavy | relaxed_order | 20 | 0 | 0.86 | 2.6 | 5.8 |
-| RLS only | 0.2.0 force_custom_plan | heavy | relaxed_order | 20 | 0 | 0.86 | 2.6 | 3.4 |
+| default search | 0.1.x auto | light | off | 20 | 0 | 1.00 | 34.1 | 42.5 |
+| default search | 0.2.0 force_custom_plan | light | off | 20 | 0 | 1.00 | 33.4 | 36.9 |
+| default search | 0.1.x auto | heavy | off | 20 | 0 | 0.84 | 3.2 | 4.6 |
+| default search | 0.2.0 force_custom_plan | heavy | off | 20 | 0 | 0.84 | 3.1 | 3.9 |
+| RLS only | 0.1.x auto | light | off | 20 | 10 | 0.50 | 21.0 | 44.8 |
+| RLS only | 0.2.0 force_custom_plan | light | off | 20 | 0 | 1.00 | 42.4 | 48.7 |
+| RLS only | 0.1.x auto | heavy | off | 20 | 0 | 0.84 | 3.0 | 3.7 |
+| RLS only | 0.2.0 force_custom_plan | heavy | off | 20 | 0 | 0.84 | 3.1 | 4.1 |
+| RLS only | 0.1.x auto | light | relaxed_order | 20 | 0 | 0.85 | 62.9 | 120.8 |
+| RLS only | 0.2.0 force_custom_plan | light | relaxed_order | 20 | 0 | 1.00 | 45.5 | 51.8 |
+| RLS only | 0.1.x auto | heavy | relaxed_order | 20 | 0 | 0.84 | 3.5 | 5.9 |
+| RLS only | 0.2.0 force_custom_plan | heavy | relaxed_order | 20 | 0 | 0.84 | 3.2 | 4.4 |
 
 ## Rows returned per search, in order (one pinned connection)
 - default search / 0.1.x auto / light: [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
 - default search / 0.2.0 force_custom_plan / light: [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
-- default search / 0.1.x auto / heavy: [10, 10, 10, 8, 10, 10, 10, 10, 8, 10, 10, 10, 10, 8, 10, 10, 10, 10, 8, 10]
-- default search / 0.2.0 force_custom_plan / heavy: [10, 10, 10, 8, 10, 10, 10, 10, 8, 10, 10, 10, 10, 8, 10, 10, 10, 10, 8, 10]
+- default search / 0.1.x auto / heavy: [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
+- default search / 0.2.0 force_custom_plan / heavy: [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
 - RLS only / 0.1.x auto / light: [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 - RLS only / 0.2.0 force_custom_plan / light: [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
-- RLS only / 0.1.x auto / heavy: [10, 10, 10, 8, 10, 10, 10, 10, 8, 10, 10, 10, 10, 8, 10, 10, 10, 10, 8, 10]
-- RLS only / 0.2.0 force_custom_plan / heavy: [10, 10, 10, 8, 10, 10, 10, 10, 8, 10, 10, 10, 10, 8, 10, 10, 10, 10, 8, 10]
-- RLS only / 0.1.x auto + iterative / light: [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 4, 7, 7, 6, 8, 4, 7, 7, 6, 8]
+- RLS only / 0.1.x auto / heavy: [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
+- RLS only / 0.2.0 force_custom_plan / heavy: [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
+- RLS only / 0.1.x auto + iterative / light: [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 7, 9, 7, 7, 8, 7, 9, 7, 7, 8]
 - RLS only / 0.2.0 force_custom_plan + iterative / light: [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
 - RLS only / 0.1.x auto + iterative / heavy: [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
 - RLS only / 0.2.0 force_custom_plan + iterative / heavy: [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10]

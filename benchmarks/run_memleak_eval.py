@@ -606,6 +606,14 @@ async def main() -> None:
     corpus = build_seed_corpus()
     queries = build_eval_queries()
 
+    with psycopg.connect(ADMIN_DSN) as conn:
+        server = conn.execute("SHOW server_version").fetchone()[0]
+        pgvector = conn.execute(
+            "SELECT extversion FROM pg_extension WHERE extname = 'vector'"
+        ).fetchone()[0]
+    import adk_memshield
+
+    print(f"PostgreSQL {server}, pgvector {pgvector}, adk-memshield {adk_memshield.__version__}")
     print(f"Seeding {len(corpus)} multi-tenant enterprise memories (3 tenants, 6 users)...")
     await seed_both_tables(corpus)
 
