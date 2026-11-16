@@ -1,5 +1,5 @@
 -- =============================================================================
--- adk-memshield (v0.1.0) Benchmark-Only Baseline Table (NO Row-Level Security)
+-- adk-memshield (v0.2.0) Benchmark-Only Baseline Table (NO Row-Level Security)
 -- =============================================================================
 -- Used by tests/ and benchmarks/ to compare an ordinary pgvector table against the
 -- RLS-protected `memories` table. Do NOT apply this file in production: it grants the
@@ -14,11 +14,15 @@ CREATE TABLE IF NOT EXISTS memories_unprotected (
     author TEXT DEFAULT 'user',
     scope TEXT NOT NULL DEFAULT 'private' CHECK (scope IN ('private', 'tenant_shared')),
     min_clearance INTEGER NOT NULL DEFAULT 1 CHECK (min_clearance BETWEEN 1 AND 5),
+    compartments TEXT[] NOT NULL DEFAULT '{}',
     content TEXT NOT NULL,
     custom_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     embedding vector(384) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Databases initialised by 0.1.x: add the 0.2.0 column.
+ALTER TABLE memories_unprotected ADD COLUMN IF NOT EXISTS compartments TEXT[] NOT NULL DEFAULT '{}';
 
 CREATE INDEX IF NOT EXISTS idx_memories_unprotected_scope_lookup
     ON memories_unprotected (app_name, tenant_id, user_id);

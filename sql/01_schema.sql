@@ -1,8 +1,9 @@
 -- =============================================================================
--- adk-memshield (v0.1.0) PostgreSQL + pgvector Schema & RLS Policies
+-- adk-memshield (v0.2.0) PostgreSQL + pgvector Schema & RLS Policies
 -- =============================================================================
--- Production schema. Apply this file only; `02_benchmark_baseline.sql` creates an
--- intentionally unprotected table for benchmarks and must not ship to production.
+-- Production schema for a new database. Apply this file only; `02_benchmark_baseline.sql`
+-- creates an intentionally unprotected table for benchmarks and must not ship to
+-- production. Upgrading a 0.1.x database: apply `migrations/0.1_to_0.2.sql` instead.
 
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
@@ -33,6 +34,8 @@ CREATE TABLE IF NOT EXISTS memories (
     author TEXT DEFAULT 'user',
     scope TEXT NOT NULL DEFAULT 'private' CHECK (scope IN ('private', 'tenant_shared')),
     min_clearance INTEGER NOT NULL DEFAULT 1 CHECK (min_clearance BETWEEN 1 AND 5),
+    -- Horizontal access on top of clearance. Empty = no compartment restriction.
+    compartments TEXT[] NOT NULL DEFAULT '{}' CHECK (array_position(compartments, NULL) IS NULL),
     content TEXT NOT NULL,
     custom_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     embedding vector(384) NOT NULL,
@@ -48,13 +51,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_session_event
     ON memories (app_name, tenant_id, user_id, session_id, (custom_metadata->>'event_id'))
     WHERE custom_metadata ? 'event_id';
 
+CREATE INDEX IF NOT EXISTS idx_memories_compartments
+    ON memories USING GIN (compartments);
+
 GRANT SELECT, INSERT, UPDATE, DELETE ON memories TO memshield_app;
 
 -- 3. Enable & Force Row-Level Security on `memories`
 ALTER TABLE memories ENABLE ROW LEVEL SECURITY;
 ALTER TABLE memories FORCE ROW LEVEL SECURITY;
 
--- Read: own rows, plus tenant-shared rows at or below the agent's clearance.
+
+-- Caller compartments are bound as a comma-separated list in app.agent_compartments.
+-- adk-memshield validates names against ^[a-z0-9_-]{1,64}$ before binding, so a comma or
+-- brace inside a name can never change how the list is parsed here.
+
+-- Read: own rows (any scope, any compartments), plus tenant-shared rows at or below the
+-- agent's clearance that carry no compartments or share one with the caller.
 DROP POLICY IF EXISTS memories_isolation_select ON memories;
 CREATE POLICY memories_isolation_select ON memories
     FOR SELECT
@@ -67,13 +79,17 @@ CREATE POLICY memories_isolation_select ON memories
             OR (
                 scope = 'tenant_shared'
                 AND min_clearance <= COALESCE(NULLIF(current_setting('app.agent_clearance', true), '')::int, 1)
+                AND (
+                    cardinality(compartments) = 0
+                    OR compartments && COALESCE(string_to_array(NULLIF(current_setting('app.agent_compartments', true), ''), ','), '{}'::text[])
+                )
             )
         )
     );
 
 -- Write: own rows only. A tenant_shared row may not be labelled above the writing
--- agent's clearance ("no write-up"), so a Tier-1 agent cannot plant content that
--- higher-clearance agents would trust as executive memory.
+-- agent's clearance ("no write-up"), and no row may carry a compartment the writer does
+-- not hold ("no write-across").
 DROP POLICY IF EXISTS memories_isolation_insert ON memories;
 CREATE POLICY memories_isolation_insert ON memories
     FOR INSERT
@@ -86,6 +102,7 @@ CREATE POLICY memories_isolation_insert ON memories
             scope = 'private'
             OR min_clearance <= COALESCE(NULLIF(current_setting('app.agent_clearance', true), '')::int, 1)
         )
+        AND compartments <@ COALESCE(string_to_array(NULLIF(current_setting('app.agent_compartments', true), ''), ','), '{}'::text[])
     );
 
 DROP POLICY IF EXISTS memories_isolation_update ON memories;
@@ -105,6 +122,7 @@ CREATE POLICY memories_isolation_update ON memories
             scope = 'private'
             OR min_clearance <= COALESCE(NULLIF(current_setting('app.agent_clearance', true), '')::int, 1)
         )
+        AND compartments <@ COALESCE(string_to_array(NULLIF(current_setting('app.agent_compartments', true), ''), ','), '{}'::text[])
     );
 
 DROP POLICY IF EXISTS memories_isolation_delete ON memories;
