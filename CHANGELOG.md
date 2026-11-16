@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-17
+
+### Documentation
+- **A second empty-results case with HNSW, and its fix.** With an HNSW index at 100,000 rows, a light caller's filtered search can come back empty from the first execution under a custom plan: the index returns `hnsw.ef_search` (40) candidates and the filter removes them all. Plan pinning cannot prevent it, and it affects application-filtered tables without RLS the same way. The README's "ANN indexes (HNSW) and RLS" section now recommends pgvector's `hnsw.iterative_scan` (`relaxed_order`, or `strict_order` for exact ordering) whenever an HNSW index is used, set as a connection startup option or role default so the pool's `RESET ALL` keeps it, with the measured rows (recall@10 0.00 → 1.00, adk-leak-arena `prepared-100k-*` raw outputs). Nothing leaked in any configuration.
+- Not made a default: it changes results and ordering for every query on the pool's connections and needs pgvector 0.8, so it is left to each deployment.
+
+### Added
+- Test that settings passed as connection startup options survive the check-in reset while a session `SET` does not (`test_startup_options_survive_the_checkin_reset`).
+
+### Changed
+- PyPI keywords: `model-context-protocol`, `access-control`.
+
 ## [0.2.0] - 2026-11-16
 
 ### Fixed

@@ -21,7 +21,7 @@ from .identity import (
 from .posture import PostureReport
 from .service import MemShieldMemoryService, register_adk_uri
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 __all__ = [
     "Allow",
