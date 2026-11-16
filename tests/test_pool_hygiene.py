@@ -231,3 +231,23 @@ async def test_set_role_is_reset_on_checkin(make_pool: Callable[..., ConnectionP
         pool.close()
         with psycopg.connect(ADMIN_DSN, autocommit=True) as admin:
             admin.execute("DROP ROLE IF EXISTS memshield_pool_probe")
+
+
+def test_startup_options_survive_the_checkin_reset(make_pool: Callable[..., ConnectionPool]) -> None:
+    """The README's HNSW advice: settings passed as connection startup options (and role
+    defaults) survive RESET ALL on check-in, while a plain session SET does not."""
+    sep = "&" if "?" in APP_DSN else "?"
+    dsn = APP_DSN + sep + "options=-c%20hnsw.iterative_scan%3Drelaxed_order%20-c%20hnsw.ef_search%3D100"
+    pool = make_pool(dsn)
+    pid = backend_pid(pool)
+    with pool.connection() as conn:
+        conn.execute("SET work_mem = '7MB'")  # a session-level SET, reset on check-in
+    with pool.connection() as conn:
+        iterative, ef_search, work_mem, pid_after = conn.execute(
+            "SELECT current_setting('hnsw.iterative_scan', true), current_setting('hnsw.ef_search', true),"
+            " current_setting('work_mem'), pg_backend_pid()"
+        ).fetchone()
+    assert pid_after == pid  # same backend, so the reset really ran in between
+    assert iterative == "relaxed_order"
+    assert ef_search == "100"
+    assert work_mem != "7MB"
