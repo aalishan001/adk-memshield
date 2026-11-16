@@ -113,6 +113,16 @@ CREATE POLICY memories_isolation_update ON memories
         app_name = current_setting('app.current_app_name', true)
         AND tenant_id = current_setting('app.current_tenant_id', true)
         AND user_id = current_setting('app.current_user_id', true)
+        -- An agent may only modify a shared row labelled within its own clearance and
+        -- compartments, so a low-clearance agent acting for the owner cannot declassify a
+        -- row a higher-clearance agent wrote.
+        AND (
+            scope = 'private'
+            OR (
+                min_clearance <= COALESCE(NULLIF(current_setting('app.agent_clearance', true), '')::int, 1)
+                AND compartments <@ COALESCE(string_to_array(NULLIF(current_setting('app.agent_compartments', true), ''), ','), '{}'::text[])
+            )
+        )
     )
     WITH CHECK (
         app_name = current_setting('app.current_app_name', true)

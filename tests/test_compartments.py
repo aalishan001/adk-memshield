@@ -180,3 +180,28 @@ async def test_migration_from_0_1_1(
     assert alice == {"old row 1", "old row 3"}
     with psycopg.connect(old_admin) as conn:
         assert conn.execute("SELECT DISTINCT compartments FROM memories").fetchall() == [([],)]
+
+
+async def test_low_clearance_agent_cannot_declassify_owner_row(
+    make_pool: Callable[..., ConnectionPool],
+) -> None:
+    """A shared row written by the owner's clearance-3 hr agent cannot be relabelled by a
+    clearance-1 agent without hr acting for the same owner."""
+    pool = make_pool()
+    high = _svc(pool, compartments=["hr"], clearance=3)
+    await high.add_memory(
+        app_name=APP, user_id="owner",
+        memories=[_entry("restructuring plan", scope="tenant_shared", min_clearance=3, compartments=["hr"])],
+    )
+    low = _svc(pool, compartments=[], clearance=1)
+    with low.rls_transaction(app_name=APP, user_id="owner") as cur:
+        cur.execute(
+            "UPDATE memories SET min_clearance = 1, compartments = '{}' WHERE user_id = 'owner'"
+        )
+        assert cur.rowcount == 0
+    with psycopg.connect(ADMIN_DSN) as conn:
+        assert conn.execute("SELECT min_clearance, compartments FROM memories").fetchall() == [(3, ["hr"])]
+    # The high-clearance agent may still edit its own row.
+    with high.rls_transaction(app_name=APP, user_id="owner") as cur:
+        cur.execute("UPDATE memories SET content = 'restructuring plan v2' WHERE user_id = 'owner'")
+        assert cur.rowcount == 1

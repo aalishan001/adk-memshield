@@ -10,6 +10,14 @@
 --     behave exactly as in 0.1.x) plus a GIN index;
 --   * the four RLS policies are recreated with the compartment rules.
 -- No data is rewritten and no row becomes visible to anyone who could not read it before.
+--
+-- Locking: ALTER TABLE takes an ACCESS EXCLUSIVE lock; inside one transaction it is held
+-- while the CHECK constraint scans the table and the GIN index is built, so reads and
+-- writes on `memories` wait for the whole migration. On a large table, run it in a quiet
+-- window, or apply the constraint NOT VALID and build the index CONCURRENTLY first (see
+-- the README upgrade notes). lock_timeout makes the migration fail instead of queueing
+-- behind long transactions.
+SET lock_timeout = '10s';
 
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS compartments TEXT[] NOT NULL DEFAULT '{}';
 
@@ -83,6 +91,16 @@ CREATE POLICY memories_isolation_update ON memories
         app_name = current_setting('app.current_app_name', true)
         AND tenant_id = current_setting('app.current_tenant_id', true)
         AND user_id = current_setting('app.current_user_id', true)
+        -- An agent may only modify a shared row labelled within its own clearance and
+        -- compartments, so a low-clearance agent acting for the owner cannot declassify a
+        -- row a higher-clearance agent wrote.
+        AND (
+            scope = 'private'
+            OR (
+                min_clearance <= COALESCE(NULLIF(current_setting('app.agent_clearance', true), '')::int, 1)
+                AND compartments <@ COALESCE(string_to_array(NULLIF(current_setting('app.agent_compartments', true), ''), ','), '{}'::text[])
+            )
+        )
     )
     WITH CHECK (
         app_name = current_setting('app.current_app_name', true)
