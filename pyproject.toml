@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "adk-memshield"
 version = "0.1.1"
-description = "Zero-trust multi-tenant semantic memory service for Google ADK backed by PostgreSQL pgvector and Row-Level Security (RLS)."
+description = "Zero-trust multi-tenant semantic memory for AI agents (Google ADK, MCP) enforced by PostgreSQL pgvector and Row-Level Security (RLS)."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
@@ -27,6 +27,7 @@ keywords = [
     "pgvector",
     "vector-database",
     "ai-security",
+    "mcp",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -57,11 +58,24 @@ Issues = "https://github.com/aalishan001/adk-memshield/issues"
 Changelog = "https://github.com/aalishan001/adk-memshield/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
+# Verify OIDC / JWT identity tokens (Firebase Auth, Identity Platform, any JWKS issuer).
+jwt = [
+    "PyJWT[crypto]>=2.8.0",
+]
+# Model Context Protocol server: `memshield-mcp` (stdio or streamable HTTP).
+mcp = [
+    "mcp>=2.3,<3",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "build>=1.0.0",
+    "PyJWT[crypto]>=2.8.0",
+    "mcp>=2.3,<3",
 ]
+
+[project.scripts]
+memshield-mcp = "adk_memshield.adapters.mcp:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/adk_memshield"]
@@ -70,6 +84,7 @@ packages = ["src/adk_memshield"]
 # The benchmark-only baseline table (sql/02_benchmark_baseline.sql) is deliberately excluded.
 [tool.hatch.build.targets.wheel.force-include]
 "sql/01_schema.sql" = "adk_memshield/sql/01_schema.sql"
+"sql/migrations/0.1_to_0.2.sql" = "adk_memshield/sql/migrations/0.1_to_0.2.sql"
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -84,5 +99,6 @@ include = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 pythonpath = ["src"]

@@ -13,6 +13,8 @@ RUN pip install --no-cache-dir --upgrade pip && \
         "psycopg[binary,pool]>=3.1.0" \
         "fastembed>=0.3.0" \
         "pydantic>=2.6.0" \
+        "PyJWT[crypto]>=2.8.0" \
+        "mcp>=2.3,<3" \
         "pytest>=8.0.0" \
         "pytest-asyncio>=0.23.0" \
         "build>=1.0.0" \
