@@ -51,4 +51,19 @@ def test_jwt_verifier(rsa_keys) -> None:
     with pytest.raises(MemShieldIdentityError, match="invalid"):
         verifier.verify(forged, audience=APP)
     with pytest.raises(ValueError, match="none"):
-        JwtIdentityVerifier(key=public_pem, algorithms=["none"])
+        JwtIdentityVerifier(key=public_pem, issuer=None, algorithms=["none"])
+
+
+def test_jwt_issuer_is_required(rsa_keys) -> None:
+    from adk_memshield import JwtIdentityVerifier
+
+    private, public_pem = rsa_keys
+    with pytest.raises(TypeError):
+        JwtIdentityVerifier(key=public_pem)  # issuer must be given explicitly
+    strict = JwtIdentityVerifier(key=public_pem, issuer="https://issuer.example")
+    claims = {"sub": "alice", "tenant": "tenant_a", "aud": APP, "exp": int(time.time()) + 300}
+    no_iss = jwt.encode(claims, private, algorithm="RS256")
+    with pytest.raises(MemShieldIdentityError, match="invalid"):
+        strict.verify(no_iss, audience=APP)
+    opted_out = JwtIdentityVerifier(key=public_pem, issuer=None)
+    assert opted_out.verify(no_iss, audience=APP).user_id == "alice"

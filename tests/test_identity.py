@@ -251,3 +251,44 @@ async def test_adk_runner_with_bound_identity(make_pool: Callable[..., Connectio
     preloaded = "\n".join(p.text or "" for c in llm.requests[0].contents for p in (c.parts or []))
     assert "locker 12" in preloaded
     assert "locker 44" not in preloaded and "locker 90" not in preloaded
+
+
+def _signed(payload: dict, key: bytes = KEY_NEW) -> str:
+    import base64
+    import hashlib
+    import hmac
+    import json
+
+    body = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
+    sig = hmac.new(key, body.encode(), hashlib.sha256).digest()
+    return body + "." + base64.urlsafe_b64encode(sig).rstrip(b"=").decode()
+
+
+@pytest.mark.parametrize("exp", [float("nan"), float("inf"), "never", True])
+def test_non_finite_or_invalid_expiry_is_refused(exp) -> None:
+    payload = {"sub": "alice", "tenant": "tenant_a", "aud": APP, "kid": "new", "exp": exp}
+    raw = _signed(payload).replace("NaN", "NaN").replace("Infinity", "Infinity")
+    with pytest.raises(MemShieldIdentityError, match="expiry"):
+        _verifier().verify(raw, audience=APP)
+
+
+def test_overlong_lifetime_is_refused() -> None:
+    import time as _time
+
+    token = _signed({"sub": "alice", "tenant": "tenant_a", "aud": APP, "kid": "new",
+                     "exp": int(_time.time()) + 30 * 86_400})
+    with pytest.raises(MemShieldIdentityError, match="lifetime"):
+        _verifier().verify(token, audience=APP)
+    relaxed = HmacIdentityVerifier({"new": KEY_NEW}, max_ttl_seconds=31 * 86_400)
+    assert relaxed.verify(token, audience=APP).user_id == "alice"
+
+
+def test_rls_transaction_always_resolves_identity(make_pool: Callable[..., ConnectionPool]) -> None:
+    """The public rls_transaction takes no pre-built identity: with a verifier it needs a token."""
+    import inspect
+
+    svc = _svc(make_pool())
+    assert "identity" not in inspect.signature(svc.store.rls_transaction).parameters
+    with pytest.raises(MemShieldIdentityError, match="no identity token"):
+        with svc.rls_transaction(app_name=APP, user_id="alice"):
+            pass

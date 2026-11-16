@@ -72,7 +72,7 @@ class MemShieldConfig(BaseModel):
     @field_validator("table_name")
     @classmethod
     def _validate_table_name(cls, value: str) -> str:
-        if not _SAFE_IDENTIFIER_RE.match(value):
+        if not _SAFE_IDENTIFIER_RE.fullmatch(value):
             raise ValueError(f"Unsafe SQL table identifier: {value!r}")
         return value
 

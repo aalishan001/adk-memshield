@@ -19,6 +19,7 @@ import binascii
 import hashlib
 import hmac
 import json
+import math
 import re
 import time
 from collections.abc import Iterator, Mapping, Sequence
@@ -46,7 +47,7 @@ def validate_compartments(values: Sequence[str] | None) -> tuple[str, ...]:
         raise ValueError("compartments must be a list of names, not a string")
     out: set[str] = set()
     for value in values:
-        if not isinstance(value, str) or not COMPARTMENT_RE.match(value):
+        if not isinstance(value, str) or not COMPARTMENT_RE.fullmatch(value):
             raise ValueError(f"invalid compartment name: {value!r}")
         out.add(value)
     return tuple(sorted(out))
@@ -165,12 +166,16 @@ class HmacIdentityVerifier:
         keys: Mapping[str, bytes | str],
         *,
         leeway_seconds: int = 0,
+        max_ttl_seconds: int = 86_400,
         tenant_claim: str = "tenant",
         clearance_claim: str = "clearance",
         compartments_claim: str = "compartments",
     ) -> None:
         if not keys:
             raise ValueError("HmacIdentityVerifier needs at least one key")
+        if max_ttl_seconds <= 0:
+            raise ValueError("max_ttl_seconds must be positive")
+        self._max_ttl = int(max_ttl_seconds)
         self._keys: dict[str, bytes] = {}
         for kid, key in keys.items():
             raw = key.encode("utf-8") if isinstance(key, str) else bytes(key)
@@ -204,10 +209,13 @@ class HmacIdentityVerifier:
             raise MemShieldIdentityError("identity token signature is invalid")
 
         exp = claims.get("exp")
-        if isinstance(exp, bool) or not isinstance(exp, (int, float)):
+        if isinstance(exp, bool) or not isinstance(exp, (int, float)) or not math.isfinite(exp):
             raise MemShieldIdentityError("identity token has no valid expiry")
-        if time.time() > float(exp) + self._leeway:
+        now = time.time()
+        if now > float(exp) + self._leeway:
             raise MemShieldIdentityError("identity token has expired")
+        if float(exp) - now > self._max_ttl + self._leeway:
+            raise MemShieldIdentityError("identity token lifetime exceeds the verifier's maximum")
         if claims.get("aud") != audience:
             raise MemShieldIdentityError("identity token was issued for another application")
 
@@ -283,6 +291,12 @@ class JwtIdentityVerifier:
     publishes a JWKS. Pass ``jwks_url`` (keys fetched and cached by PyJWT) or a fixed
     ``key`` (a public key, for tests or a single static key). The token's ``aud`` must equal
     the application name of the operation unless ``audience`` is given explicitly.
+
+    ``issuer`` is required: with a JWKS shared by many issuers (multi-tenant Entra ID, the
+    Firebase key set shared by all projects), a token from another issuer signed by the same
+    keys would otherwise be accepted. Pass ``issuer=None`` only for a key set that belongs
+    to your issuer alone. Prefer an ``audience`` your identity provider owns (a client or
+    project id) over the ADK app name.
     """
 
     def __init__(
@@ -290,8 +304,8 @@ class JwtIdentityVerifier:
         *,
         jwks_url: str | None = None,
         key: Any | None = None,
+        issuer: str | None,
         algorithms: Sequence[str] = ("RS256",),
-        issuer: str | None = None,
         audience: str | None = None,
         leeway_seconds: int = 0,
         tenant_claim: str = "tenant",
@@ -330,7 +344,7 @@ class JwtIdentityVerifier:
                 signing_key = self._jwks_client.get_signing_key_from_jwt(token).key
             else:
                 signing_key = self._key
-            options = {"require": ["exp", "sub", "aud"]}
+            options = {"require": ["exp", "sub", "aud"] + (["iss"] if self._issuer else [])}
             claims = jwt.decode(
                 token,
                 signing_key,
