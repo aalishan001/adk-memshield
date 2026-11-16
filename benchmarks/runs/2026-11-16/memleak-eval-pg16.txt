@@ -1,0 +1,26 @@
+$ docker compose -p adk-memshield run --rm test python benchmarks/run_memleak_eval.py
+Seeding 60 multi-tenant enterprise memories (3 tenants, 6 users)...
+Running 75 queries x 5 repeats (top_k=3) per table...
+
+### Leakage & Recall: Unprotected `pgvector` vs. `adk-memshield` (PostgreSQL RLS)
+
+| Scenario | Application-layer mistake | Queries | Unprotected: queries leaking | Unprotected: leaked share of top-k rows | Unprotected: leak at rank 1 | `adk-memshield`: queries leaking | Unprotected clean recall | `adk-memshield` clean recall |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| Scenario 1: Shared-Tenant Pool (Incidental Overlap) | Filters `tenant_id` only, omits `user_id`/`scope` | 12 | 100.0% | 44.4% | 8.3% | **0.0%** | 100.0% | **100.0%** |
+| Scenario 2: Adversarial Top-K Planted Lure | Same tenant-only filter; co-tenant plants query-shaped lures | 12 | 100.0% | 58.3% | 58.3% | **0.0%** | 100.0% | **100.0%** |
+| Scenario 3: Tool-Argument `user_id` Override | Correct filter, but `user_id` taken from attacker-controlled tool args | 9 | 100.0% | 81.5% | 100.0% | **0.0%** | n/a | **n/a** |
+| Scenario 4: Low-Clearance Swarm Agent (AgentLeak-style) | Own + `tenant_shared` rows, omits `min_clearance` check | 9 | 100.0% | 44.4% | 66.7% | **0.0%** | 100.0% | **100.0%** |
+| Scenario 5: Total Filter Omission | No `WHERE` clause at all (`simulate_missing_app_filter=True`) | 33 | 100.0% | 74.7% | 69.7% | **0.0%** | 72.7% | **100.0%** |
+| **Mean of Scenarios 1-5** | | 75 | **100.0%** | **60.7%** | **60.6%** | **0.0%** | **93.2%** | **100.0%** |
+| Control: Correct App Filter (no bug) | `MemShieldMemoryService` default filter (user/scope/clearance) | 33 | 0.0% | 0.0% | 0.0% | **0.0%** | 100.0% | **100.0%** |
+
+### Retrieval Latency (DB transaction incl. `set_config`, ms)
+
+| Scenario | Unprotected p50 / p95 | `adk-memshield` p50 / p95 |
+| :--- | :---: | :---: |
+| Scenario 1: Shared-Tenant Pool (Incidental Overlap) | 1.09 / 1.54 | 1.15 / 1.68 |
+| Scenario 2: Adversarial Top-K Planted Lure | 1.12 / 1.69 | 1.14 / 1.63 |
+| Scenario 3: Tool-Argument `user_id` Override | 1.13 / 1.38 | 1.21 / 1.65 |
+| Scenario 4: Low-Clearance Swarm Agent (AgentLeak-style) | 1.07 / 1.60 | 1.14 / 1.67 |
+| Scenario 5: Total Filter Omission | 0.98 / 1.34 | 1.02 / 1.35 |
+| Control: Correct App Filter (no bug) | 1.13 / 1.72 | 1.13 / 1.76 |

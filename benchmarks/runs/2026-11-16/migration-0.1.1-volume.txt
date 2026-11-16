@@ -1,0 +1,33 @@
+## volume adk_memshield_pgdata (initialised by the 0.1.1 schema): before
+0
+## apply migration (run 1, single transaction)
+ok
+## apply migration (run 2, idempotency)
+psql:<stdin>:14: NOTICE:  column "compartments" of relation "memories" already exists, skipping
+psql:<stdin>:29: NOTICE:  relation "idx_memories_compartments" already exists, skipping
+ok
+## apply 02_benchmark_baseline.sql (adds column to the benchmark table)
+psql:<stdin>:22: NOTICE:  relation "memories_unprotected" already exists, skipping
+psql:<stdin>:28: NOTICE:  relation "idx_memories_unprotected_scope_lookup" already exists, skipping
+psql:<stdin>:32: NOTICE:  relation "idx_memories_unprotected_session_event" already exists, skipping
+ok
+## rows after (compartments default)
+ user_id |     scope     | compartments 
+---------+---------------+--------------
+ u1      | private       | {}
+ u2      | tenant_shared | {}
+ u3      | private       | {}
+ u4      | tenant_shared | {}
+ u5      | private       | {}
+ u6      | tenant_shared | {}
+(6 rows)
+
+## fresh database with sql/01_schema.sql
+NOTICE:  database "memshield_fresh" does not exist, skipping
+psql:<stdin>:70: NOTICE:  policy "memories_isolation_select" for relation "memories" does not exist, skipping
+psql:<stdin>:93: NOTICE:  policy "memories_isolation_insert" for relation "memories" does not exist, skipping
+psql:<stdin>:108: NOTICE:  policy "memories_isolation_update" for relation "memories" does not exist, skipping
+psql:<stdin>:128: NOTICE:  policy "memories_isolation_delete" for relation "memories" does not exist, skipping
+ok
+## compare: policies, columns, indexes, constraints (migrated vs fresh)
+IDENTICAL: 29 catalog lines match

@@ -24,6 +24,7 @@ reproducible illustration of failure modes, not an estimate of real-world leak r
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import statistics
 import time
@@ -430,6 +431,8 @@ async def seed_both_tables(corpus: list[SeedMemory]) -> None:
                 tenant_id=tenant_id,
                 agent_clearance=5,
                 table_name=table_name,
+                # The baseline table is intentionally unprotected; memshield would refuse it.
+                allow_insecure_role=table_name == "memories_unprotected",
             )
             entries = [
                 MemoryEntry(
@@ -533,6 +536,7 @@ async def evaluate_mode(
                 agent_clearance=q.agent_clearance,
                 table_name=table_name,
                 simulate_missing_app_filter=scenario.simulate_missing_app_filter,
+                allow_insecure_role=table_name == "memories_unprotected",
                 top_k=top_k,
                 embed_fn=lambda texts: [query_vecs[t] for t in texts],
             )
@@ -671,4 +675,6 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    # The unprotected baseline logs an 'insecure posture' warning on every transaction.
+    logging.getLogger("adk_memshield").setLevel(logging.ERROR)
     asyncio.run(main())

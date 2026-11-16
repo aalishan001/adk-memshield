@@ -1,0 +1,79 @@
+$ docker compose -p adk-memshield run --rm test python benchmarks/plan_cache_hnsw.py --rows 100000 --repeats 4 --reuse   # database created by an identical run with --keep (load 67.6 s, HNSW build 28.4 s)
+# Plan cache + HNSW + RLS benchmark
+postgres: 16.15 (Debian 16.15-1.pgdg12+2)
+pgvector: 0.8.7
+rows: 100000
+tenant_t0_rows: 33353
+heavy_user_rows: 29998
+light_user_visible_rows: 30
+hnsw_index: True
+top_k: 10
+distinct_queries: 5
+repeats_per_query: 4
+pool: psycopg_pool.ConnectionPool(min_size=1, max_size=1), psycopg prepare_threshold=5
+
+| Query shape | memshield | User | hnsw.iterative_scan | Searches | Empty | Recall@10 | p50 ms | p95 ms |
+| :--- | :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: |
+| default search | 0.1.x auto | light | off | 20 | 0 | 1.00 | 31.7 | 38.7 |
+| default search | 0.2.0 force_custom_plan | light | off | 20 | 0 | 1.00 | 31.7 | 34.7 |
+| default search | 0.1.x auto | heavy | off | 20 | 0 | 0.84 | 3.3 | 5.5 |
+| default search | 0.2.0 force_custom_plan | heavy | off | 20 | 0 | 0.84 | 2.6 | 3.7 |
+| RLS only | 0.1.x auto | light | off | 20 | 10 | 0.50 | 21.4 | 46.8 |
+| RLS only | 0.2.0 force_custom_plan | light | off | 20 | 0 | 1.00 | 40.1 | 43.2 |
+| RLS only | 0.1.x auto | heavy | off | 20 | 0 | 0.84 | 2.5 | 6.1 |
+| RLS only | 0.2.0 force_custom_plan | heavy | off | 20 | 0 | 0.84 | 2.6 | 3.2 |
+| RLS only | 0.1.x auto | light | relaxed_order | 20 | 0 | 0.82 | 65.2 | 107.9 |
+| RLS only | 0.2.0 force_custom_plan | light | relaxed_order | 20 | 0 | 1.00 | 42.2 | 45.9 |
+| RLS only | 0.1.x auto | heavy | relaxed_order | 20 | 0 | 0.86 | 2.6 | 5.8 |
+| RLS only | 0.2.0 force_custom_plan | heavy | relaxed_order | 20 | 0 | 0.86 | 2.6 | 3.4 |
+
+## Rows returned per search, in order (one pinned connection)
+- default search / 0.1.x auto / light: [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
+- default search / 0.2.0 force_custom_plan / light: [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
+- default search / 0.1.x auto / heavy: [10, 10, 10, 8, 10, 10, 10, 10, 8, 10, 10, 10, 10, 8, 10, 10, 10, 10, 8, 10]
+- default search / 0.2.0 force_custom_plan / heavy: [10, 10, 10, 8, 10, 10, 10, 10, 8, 10, 10, 10, 10, 8, 10, 10, 10, 10, 8, 10]
+- RLS only / 0.1.x auto / light: [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+- RLS only / 0.2.0 force_custom_plan / light: [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
+- RLS only / 0.1.x auto / heavy: [10, 10, 10, 8, 10, 10, 10, 10, 8, 10, 10, 10, 10, 8, 10, 10, 10, 10, 8, 10]
+- RLS only / 0.2.0 force_custom_plan / heavy: [10, 10, 10, 8, 10, 10, 10, 10, 8, 10, 10, 10, 10, 8, 10, 10, 10, 10, 8, 10]
+- RLS only / 0.1.x auto + iterative / light: [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 4, 7, 7, 6, 8, 4, 7, 7, 6, 8]
+- RLS only / 0.2.0 force_custom_plan + iterative / light: [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
+- RLS only / 0.1.x auto + iterative / heavy: [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
+- RLS only / 0.2.0 force_custom_plan + iterative / heavy: [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
+
+## default search: custom plan (light user)
+Limit
+  ->  Sort
+        Sort Key: ((embedding <=> '<query vector>'::vector))
+        ->  Gather
+              Workers Planned: 2
+              ->  Result
+                    One-Time Filter: ((current_setting('app.current_app_name'::text, true) = 'bench'::text) AND (current_setting('app.current_tenant_id'::text, true) = 't0'::text))
+                    ->  Parallel Seq Scan on memories
+                          Filter: ((app_name = 'bench'::text) AND (tenant_id = 't0'::text) AND ((user_id = current_setting('app.current_user_id'::text, true)) OR ((scope = 'tenant_shared'::text) AND (min_clearance <= COALESCE((NULLIF(current_setting('app.agent_clearance'::text, true), ''::text))::integer, 1)) AND ((cardinality(compartments) = 0) OR (compartments && COALESCE(string_to_array(NULLIF(current_setting('app.agent_compartments'::text, true), ''::text), ','::text), '{}'::text[]))))) AND ((user_id = 'light'::text) OR ((scope = 'tenant_shared'::text) AND (min_clearance <= 1) AND ((cardinality(compartments) = 0) OR (compartments && '{}'::text[])))))
+
+## default search: generic plan (light user)
+Limit
+  ->  Gather Merge
+        Workers Planned: 2
+        ->  Sort
+              Sort Key: ((embedding <=> $6))
+              ->  Result
+                    One-Time Filter: ((current_setting('app.current_app_name'::text, true) = $1) AND (current_setting('app.current_tenant_id'::text, true) = $2))
+                    ->  Parallel Seq Scan on memories
+                          Filter: ((app_name = $1) AND (tenant_id = $2) AND ((user_id = current_setting('app.current_user_id'::text, true)) OR ((scope = 'tenant_shared'::text) AND (min_clearance <= COALESCE((NULLIF(current_setting('app.agent_clearance'::text, true), ''::text))::integer, 1)) AND ((cardinality(compartments) = 0) OR (compartments && COALESCE(string_to_array(NULLIF(current_setting('app.agent_compartments'::text, true), ''::text), ','::text), '{}'::text[]))))) AND ((user_id = $3) OR ((scope = 'tenant_shared'::text) AND (min_clearance <= $4) AND ((cardinality(compartments) = 0) OR (compartments && $5)))))
+
+## RLS only: custom plan (light user)
+Limit
+  ->  Gather Merge
+        Workers Planned: 2
+        ->  Sort
+              Sort Key: ((embedding <=> '<query vector>'::vector))
+              ->  Parallel Seq Scan on memories
+                    Filter: ((app_name = current_setting('app.current_app_name'::text, true)) AND (tenant_id = current_setting('app.current_tenant_id'::text, true)) AND ((user_id = current_setting('app.current_user_id'::text, true)) OR ((scope = 'tenant_shared'::text) AND (min_clearance <= COALESCE((NULLIF(current_setting('app.agent_clearance'::text, true), ''::text))::integer, 1)) AND ((cardinality(compartments) = 0) OR (compartments && COALESCE(string_to_array(NULLIF(current_setting('app.agent_compartments'::text, true), ''::text), ','::text), '{}'::text[]))))))
+
+## RLS only: generic plan (light user)
+Limit
+  ->  Index Scan using idx_memories_embedding_hnsw on memories
+        Order By: (embedding <=> $1)
+        Filter: ((app_name = current_setting('app.current_app_name'::text, true)) AND (tenant_id = current_setting('app.current_tenant_id'::text, true)) AND ((user_id = current_setting('app.current_user_id'::text, true)) OR ((scope = 'tenant_shared'::text) AND (min_clearance <= COALESCE((NULLIF(current_setting('app.agent_clearance'::text, true), ''::text))::integer, 1)) AND ((cardinality(compartments) = 0) OR (compartments && COALESCE(string_to_array(NULLIF(current_setting('app.agent_compartments'::text, true), ''::text), ','::text), '{}'::text[]))))))

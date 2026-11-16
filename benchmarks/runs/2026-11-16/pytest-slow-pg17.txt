@@ -1,0 +1,13 @@
+$ ... -m slow   # PostgreSQL 17.12
+============================= test session starts ==============================
+platform linux -- Python 3.12.15, pytest-9.2.0, pluggy-1.7.0 -- /usr/local/bin/python3.12
+rootdir: /app
+configfile: pyproject.toml
+testpaths: tests
+plugins: asyncio-1.5.0, anyio-4.16.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collecting ... collected 105 items / 104 deselected / 1 selected
+
+tests/test_plan_cache.py::test_prepared_hnsw_recall_with_negative_control PASSED [100%]
+
+====================== 1 passed, 104 deselected in 49.80s ======================

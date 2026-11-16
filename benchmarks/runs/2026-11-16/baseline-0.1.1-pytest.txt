@@ -1,0 +1,33 @@
+ Container adk_memshield_db Running 
+ Container adk_memshield_db Waiting 
+ Container adk_memshield_db Healthy 
+ Container adk-memshield-test-run-a7a6036dd80e Creating 
+ Container adk-memshield-test-run-a7a6036dd80e Created 
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+ModuleNotFoundError: No module named 'pgvector'
+fastembed                          0.9.0
+google-adk                         2.13.0
+psycopg                            3.3.6
+psycopg-pool                       3.3.3
+pydantic                           2.14.1
+============================= test session starts ==============================
+platform linux -- Python 3.12.15, pytest-9.1.1, pluggy-1.7.0 -- /usr/local/bin/python3.12
+cachedir: .pytest_cache
+rootdir: /app
+configfile: pyproject.toml
+testpaths: tests
+plugins: asyncio-1.4.0, anyio-4.15.1
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 8 items
+
+tests/test_rls_isolation.py::test_adk_session_and_memory_roundtrip PASSED [ 12%]
+tests/test_rls_isolation.py::test_cross_tenant_isolation PASSED          [ 25%]
+tests/test_rls_isolation.py::test_cross_user_private_isolation PASSED    [ 37%]
+tests/test_rls_isolation.py::test_missing_app_filter_rls_protection PASSED [ 50%]
+tests/test_rls_isolation.py::test_multi_agent_clearance_rbac PASSED      [ 62%]
+tests/test_rls_isolation.py::test_fail_closed_without_session_context PASSED [ 75%]
+tests/test_rls_isolation.py::test_insert_spoofing_blocked_by_rls PASSED  [ 87%]
+tests/test_rls_isolation.py::test_adk_runner_preload_and_load_memory_integration PASSED [100%]
+
+============================== 8 passed in 4.51s ===============================
