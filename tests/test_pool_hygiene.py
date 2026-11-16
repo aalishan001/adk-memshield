@@ -109,30 +109,39 @@ async def test_server_killed_connection_is_replaced(make_pool: Callable[..., Con
 
     resp = await svc_a.search_memory(app_name=APP, user_id="alice", query="secret")
     assert [m.content.parts[0].text for m in resp.memories] == ["A secret: alpha-7731"]
-    assert backend_pid(pool) != victim
 
 
-def _session_scoped_bind(pool: ConnectionPool) -> None:
-    """Custom SQL that wrongly binds alice's identity at SESSION scope (is_local => false)."""
+def _session_scoped_bind(pool: ConnectionPool) -> int:
+    """Custom SQL that wrongly binds alice's identity at SESSION scope (is_local => false).
+
+    Returns the backend pid it ran on.
+    """
     svc = _svc(pool, "tenant_a")
     with svc.rls_transaction(app_name=APP, user_id="alice") as cur:
         cur.execute(
             "SELECT set_config('app.current_app_name', %s, false),"
             " set_config('app.current_tenant_id', 'tenant_a', false),"
-            " set_config('app.current_user_id', 'alice', false)",
+            " set_config('app.current_user_id', 'alice', false), pg_backend_pid()",
             (APP,),
         )
+        return int(cur.fetchone()[3])
 
 
 async def test_session_scoped_context_is_reset_on_checkin(
     make_pool: Callable[..., ConnectionPool],
 ) -> None:
-    """memshield's pools run RESET ALL when a connection is returned."""
+    """memshield's pools run RESET ALL when a connection is returned.
+
+    Same backend afterwards (the reset left the connection idle and the pool kept it), so
+    the clean context really comes from the reset, not from a fresh connection.
+    """
     pool = make_pool(reset=True)
     await _seed(pool)
-    _session_scoped_bind(pool)
-    app, tenant, user, visible, _ = _raw_view(pool)
+    pid = _session_scoped_bind(pool)
+    app, tenant, user, visible, pid_after = _raw_view(pool)
     assert (app or "", tenant or "", user or "", visible) == ("", "", "", 0)
+    assert pid_after == pid
+    assert pool.get_stats().get("returns_bad", 0) == 0
 
 
 async def test_session_scoped_context_negative_control(
@@ -144,8 +153,9 @@ async def test_session_scoped_context_negative_control(
     """
     pool = make_pool(reset=False)
     await _seed(pool)
-    _session_scoped_bind(pool)
-    _, tenant, user, visible, _ = _raw_view(pool)
+    pid = _session_scoped_bind(pool)
+    _, tenant, user, visible, pid_after = _raw_view(pool)
+    assert pid_after == pid
     assert (tenant, user) == ("tenant_a", "alice")
     assert visible == 1  # a context-free query now reads alice's row
 
@@ -166,3 +176,58 @@ async def test_concurrent_tenants_on_a_shared_pool(make_pool: Callable[..., Conn
     for i in range(60):
         tasks.append(one(svc_a, "alice", "tenant_a") if i % 2 else one(svc_b, "bob", "tenant_b"))
     await asyncio.gather(*tasks)
+
+
+@pytest.mark.parametrize("reset", [True, False])
+async def test_temp_table_cannot_shadow_memories(
+    make_pool: Callable[..., ConnectionPool], reset: bool
+) -> None:
+    """A TEMP TABLE named memories, created on the yielded cursor, must not capture later
+    writes or reads: the table is schema-qualified, and the reset callback drops temp tables."""
+    pool = make_pool(reset=reset)
+    await _seed(pool)
+    svc_a = _svc(pool, "tenant_a")
+    with svc_a.rls_transaction(app_name=APP, user_id="alice") as cur:
+        cur.execute("CREATE TEMP TABLE memories (LIKE public.memories INCLUDING DEFAULTS)")
+        cur.execute("SELECT pg_backend_pid()")
+        pid = cur.fetchone()[0]
+
+    # The store that already resolved its table keeps writing to the real table.
+    await svc_a.add_memory(app_name=APP, user_id="alice", memories=[_entry("A second note")])
+    svc_b = _svc(pool, "tenant_b")
+    if reset:
+        resp = await svc_b.search_memory(app_name=APP, user_id="bob", query="secret")
+        assert [m.content.parts[0].text for m in resp.memories] == ["B secret: bravo-1188"]
+    else:
+        # Without the reset the temp table survives; a store resolving its table on this
+        # connection refuses to run instead of using the shadow (fail closed).
+        from adk_memshield import MemShieldConfigurationError
+
+        with pytest.raises(MemShieldConfigurationError, match="temporary"):
+            await svc_b.search_memory(app_name=APP, user_id="bob", query="secret")
+    assert backend_pid(pool) == pid  # same connection throughout
+    with psycopg.connect(ADMIN_DSN) as admin:
+        stored = admin.execute(
+            "SELECT count(*) FROM public.memories WHERE content = 'A second note'"
+        ).fetchone()[0]
+    assert stored == 1
+    with pool.connection() as conn:
+        temp_left = conn.execute("SELECT to_regclass('pg_temp.memories') IS NOT NULL").fetchone()[0]
+    assert temp_left is (not reset)
+
+
+async def test_set_role_is_reset_on_checkin(make_pool: Callable[..., ConnectionPool]) -> None:
+    pool = make_pool(reset=True)
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as admin:
+        admin.execute("DROP ROLE IF EXISTS memshield_pool_probe")
+        admin.execute("CREATE ROLE memshield_pool_probe NOLOGIN")
+        admin.execute("GRANT memshield_pool_probe TO memshield_app")
+    try:
+        with _svc(pool, "tenant_a").rls_transaction(app_name=APP, user_id="alice") as cur:
+            cur.execute("SET SESSION ROLE memshield_pool_probe")
+        with pool.connection() as conn:
+            assert conn.execute("SELECT current_user").fetchone()[0] == "memshield_app"
+    finally:
+        pool.close()
+        with psycopg.connect(ADMIN_DSN, autocommit=True) as admin:
+            admin.execute("DROP ROLE IF EXISTS memshield_pool_probe")

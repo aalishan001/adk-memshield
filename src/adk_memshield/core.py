@@ -23,7 +23,7 @@ from psycopg_pool import ConnectionPool
 
 from .config import MemShieldConfig
 from .embedder import EmbedFn, MemShieldEmbedder
-from .errors import MemShieldIdentityError
+from .errors import MemShieldConfigurationError, MemShieldIdentityError
 from .hooks import Allow, Block, Downlabel, PendingMemory, apply_downlabel
 from .identity import MemShieldIdentity, current_identity_token, validate_compartments
 from .posture import PostureReport, enforce_rls_posture
@@ -40,15 +40,19 @@ _POSTURE_LOCK = threading.Lock()
 
 
 def reset_connection(conn: psycopg.Connection[Any]) -> None:
-    """Pool ``reset`` callback: drop session-level settings when a connection is returned.
+    """Pool ``reset`` callback: drop session state when a connection is returned.
 
     memshield binds identity with transaction-local ``set_config(..., true)``, which
     PostgreSQL discards at commit or rollback. Custom SQL on the cursor yielded by
-    ``rls_transaction`` could still set an ``app.*`` value at *session* level; ``RESET ALL``
-    removes it before the connection is lent to anyone else. memshield's own pools use this
-    callback. If you pass your own ``pool=``, create it with ``reset=reset_connection``.
+    ``rls_transaction`` could still leave session state behind: a session-level ``app.*``
+    setting, a ``SET ROLE``, or a temporary table. This runs ``RESET ALL``, ``RESET ROLE``
+    and ``DISCARD TEMP`` before the connection is lent to anyone else (advisory locks and
+    ``LISTEN`` are not reset; don't create them on the yielded cursor). memshield's own
+    pools use this callback. If you pass your own ``pool=``, create it with
+    ``reset=reset_connection``; note that it also clears session ``SET``s made by a pool
+    ``configure=`` callback, so put those in the DSN ``options`` or ``ALTER ROLE ... SET``.
     """
-    conn.execute("RESET ALL")
+    conn.execute("RESET ALL; RESET ROLE; DISCARD TEMP")
     conn.commit()
 
 
@@ -151,8 +155,11 @@ class MemShieldStore:
 
     Every operation runs in one explicit transaction that binds the caller's identity with
     ``set_config(..., true)`` (transaction-local), and pins ``plan_cache_mode`` to
-    ``force_custom_plan`` in the same statement so a cached generic plan can never turn an
-    HNSW scan into a silent post-filter (see the README section on ANN indexes).
+    ``force_custom_plan`` in the same statement, so the planner sees the actual query vector
+    and ``LIMIT`` on every execution instead of reusing a cached generic plan. An HNSW scan
+    with the policy as a post-filter can still drop rows under a custom plan (see the README
+    section on ANN indexes). The table is used under its schema-qualified name, resolved
+    once, so a temporary table of the same name can never shadow it.
     """
 
     #: Plan cache mode bound in every transaction. Override to ``"auto"`` only to
@@ -173,6 +180,7 @@ class MemShieldStore:
             embed_fn=embed_fn,
         )
         self._pool = pool if pool is not None else _get_shared_pool(config.dsn)
+        self._qualified_table: str | None = None
         self.last_query_telemetry: QueryTelemetry | None = None
 
     @property
@@ -278,29 +286,73 @@ class MemShieldStore:
                 _POSTURE_VERIFIED.setdefault(self._pool, set()).add(self.config.table_name)
         return report
 
+    def _resolve_table(self, cur: psycopg.Cursor[Any]) -> str:
+        """Schema-qualified name of the configured table, resolved once per store.
+
+        Refuses a temporary table: ``pg_temp`` is searched before every other schema, so an
+        unqualified name could otherwise be shadowed by a temp table created on a pooled
+        connection.
+        """
+        if self._qualified_table is None:
+            cur.execute(
+                "SELECT quote_ident(n.nspname) || '.' || quote_ident(c.relname),"
+                " n.nspname LIKE 'pg\\_temp\\_%%'"
+                " FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace"
+                " WHERE c.oid = to_regclass(%s)",
+                (self.config.table_name,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise MemShieldConfigurationError(
+                    f"table {self.config.table_name!r} does not exist on the search_path"
+                )
+            if row[1]:
+                raise MemShieldConfigurationError(
+                    f"table {self.config.table_name!r} resolves to a temporary table"
+                )
+            self._qualified_table = str(row[0])
+        return self._qualified_table
+
     # ------------------------------------------------------------------ transaction
     @contextmanager
-    def rls_transaction(
-        self,
-        *,
-        app_name: str,
-        user_id: str,
-        identity: MemShieldIdentity | None = None,
-    ) -> Iterator[psycopg.Cursor[Any]]:
+    def rls_transaction(self, *, app_name: str, user_id: str) -> Iterator[psycopg.Cursor[Any]]:
         """Yield a cursor in an explicit transaction bound to the caller's RLS identity.
 
+        The identity is always resolved (and verified, when a verifier is configured).
         Identity, compartments and ``plan_cache_mode`` are bound with one
         ``set_config(..., true)`` statement, so they are discarded at commit or rollback.
         Any custom SQL on the yielded cursor is subject to the RLS policies even if it omits
-        its own ownership filters.
+        its own ownership filters. Use :attr:`qualified_table` to name the table.
         """
-        if identity is None:
-            identity = self.resolve_identity(app_name=app_name, user_id=user_id)
+        identity = self.resolve_identity(app_name=app_name, user_id=user_id)
+        with self._transaction(app_name, identity) as cur:
+            yield cur
+
+    def _table_sql(self) -> str:
+        """Schema-qualified table name for SQL text (checks posture first, once)."""
+        if self._qualified_table is None:
+            with self._pool.connection() as conn:
+                with conn.transaction():
+                    with conn.cursor() as cur:
+                        self._check_posture(cur)
+                        self._resolve_table(cur)
+        assert self._qualified_table is not None
+        return self._qualified_table
+
+    @property
+    def qualified_table(self) -> str | None:
+        """The schema-qualified table name once resolved (after the first transaction)."""
+        return self._qualified_table
+
+    @contextmanager
+    def _transaction(self, app_name: str, identity: MemShieldIdentity) -> Iterator[psycopg.Cursor[Any]]:
+        """Internal: bind an identity that was already resolved by ``resolve_identity``."""
         context = self._context(app_name, identity)
         with self._pool.connection() as conn:
             with conn.transaction():
                 with conn.cursor() as cur:
                     self._check_posture(cur)
+                    self._resolve_table(cur)
                     cur.execute(
                         """
                         SELECT
@@ -384,7 +436,7 @@ class MemShieldStore:
                 continue
             to_store.append((idx, pending))
 
-        table = self.config.table_name
+        table = self._table_sql()
         insert_sql = f"""
             INSERT INTO {table} (
                 app_name, tenant_id, user_id, session_id, author,
@@ -405,7 +457,7 @@ class MemShieldStore:
                 latency_ms=0.0,
                 row_count=0,
                 simulate_missing_app_filter=self.config.simulate_missing_app_filter,
-                table_name=table,
+                table_name=self.config.table_name,
                 blocked_writes=blocked,
             )
             return ids
@@ -413,7 +465,7 @@ class MemShieldStore:
         embeddings = self.embedder.embed_documents([p.text for _, p in to_store])
         t0 = time.perf_counter()
         inserted = 0
-        with self.rls_transaction(app_name=app_name, user_id=user_id, identity=identity) as cur:
+        with self._transaction(app_name, identity) as cur:
             for (idx, pending), vec in zip(to_store, embeddings, strict=True):
                 cur.execute(
                     insert_sql,
@@ -443,7 +495,7 @@ class MemShieldStore:
             latency_ms=(time.perf_counter() - t0) * 1000.0,
             row_count=inserted,
             simulate_missing_app_filter=self.config.simulate_missing_app_filter,
-            table_name=table,
+            table_name=self.config.table_name,
             blocked_writes=blocked,
         )
         return ids
@@ -463,7 +515,7 @@ class MemShieldStore:
         if limit < 1:
             raise ValueError("top_k must be at least 1")
         vec_literal = _format_vector(self.embedder.embed_query(query))
-        table = self.config.table_name
+        table = self._table_sql()
 
         if self.config.simulate_missing_app_filter:
             sql = f"""
@@ -502,7 +554,7 @@ class MemShieldStore:
             )
 
         t0 = time.perf_counter()
-        with self.rls_transaction(app_name=app_name, user_id=user_id, identity=identity) as cur:
+        with self._transaction(app_name, identity) as cur:
             cur.execute(sql, params)
             rows = cur.fetchall()
         latency_ms = (time.perf_counter() - t0) * 1000.0
@@ -551,7 +603,7 @@ class MemShieldStore:
             latency_ms=latency_ms,
             row_count=len(hits),
             simulate_missing_app_filter=self.config.simulate_missing_app_filter,
-            table_name=table,
+            table_name=self.config.table_name,
         )
         return hits
 
@@ -559,7 +611,7 @@ class MemShieldStore:
     def delete(self, *, app_name: str, user_id: str, memory_id: str | None = None) -> int:
         """Delete one memory id, or every memory the caller owns. Returns rows deleted."""
         identity = self.resolve_identity(app_name=app_name, user_id=user_id)
-        table = self.config.table_name
+        table = self._table_sql()
         owner_filter = "app_name = %s AND tenant_id = %s AND user_id = %s"
         owner_params: tuple[Any, ...] = (app_name, identity.tenant_id, identity.user_id)
         if memory_id is not None:
@@ -570,7 +622,7 @@ class MemShieldStore:
             params = owner_params
 
         t0 = time.perf_counter()
-        with self.rls_transaction(app_name=app_name, user_id=user_id, identity=identity) as cur:
+        with self._transaction(app_name, identity) as cur:
             cur.execute(sql, params)
             deleted = cur.rowcount if cur.rowcount is not None else 0
         self.last_query_telemetry = QueryTelemetry(
@@ -580,6 +632,6 @@ class MemShieldStore:
             latency_ms=(time.perf_counter() - t0) * 1000.0,
             row_count=deleted,
             simulate_missing_app_filter=self.config.simulate_missing_app_filter,
-            table_name=table,
+            table_name=self.config.table_name,
         )
         return deleted
