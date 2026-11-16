@@ -36,12 +36,7 @@ ADMIN_DSN = os.environ.get(
 ZERO_VECTOR = "[" + ",".join(["0"] * 384) + "]"
 
 
-@pytest.fixture(autouse=True)
-def clean_tables() -> None:
-    """Truncate test tables via admin connection before each test case."""
-    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
-        with conn.cursor() as cur:
-            cur.execute("TRUNCATE TABLE memories, memories_unprotected;")
+# Tables are truncated before each test by the autouse fixture in conftest.py.
 
 
 def _make_entry(
@@ -278,12 +273,14 @@ async def test_missing_app_filter_rls_protection() -> None:
         tenant_id="tenant_alpha",
         table_name="memories_unprotected",
         simulate_missing_app_filter=True,
+        allow_insecure_role=True,  # intentionally unprotected baseline table
     )
     unprotected_beta = MemShieldMemoryService(
         dsn=APP_DSN,
         tenant_id="tenant_beta",
         table_name="memories_unprotected",
         simulate_missing_app_filter=True,
+        allow_insecure_role=True,  # intentionally unprotected baseline table
     )
     protected_alpha = MemShieldMemoryService(
         dsn=APP_DSN,
