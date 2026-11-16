@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-16
+
 ### Fixed
 - **Recall no longer collapses when a prepared statement switches to a generic plan.** psycopg 3 prepares a statement after 5 executions on one connection, and PostgreSQL may then cache a generic plan; with the query vector and `LIMIT` unknown, that plan can be the HNSW scan with the RLS policy applied as a post-filter, so a caller with few visible rows gets empty results (nothing leaks). Every RLS transaction now binds `plan_cache_mode = force_custom_plan` in the same statement as the identity, covering custom SQL on `rls_transaction()` too. Measured at 100,000 rows on PostgreSQL 16.15 and 17.12, for custom SQL on `rls_transaction()` (the RLS-only query shape): the light user's recall@10 on a pinned connection went from 0.50 (empty from the 11th search on) to 1.00. memshield's own search was not affected in this measurement. The pin does not stop HNSW post-filtering under a custom plan (see the README). Reported and measured by Sunnatulla (https://dev.to/sunnatulla_dev/comment/3l7np).
 - README: "a query with no WHERE clause returns only the caller's rows" was wrong; it returns the rows the caller is entitled to (own rows plus tenant-shared rows at or below their clearance, and now within their compartments).

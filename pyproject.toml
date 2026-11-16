@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "adk-memshield"
-version = "0.1.1"
+version = "0.2.0"
 description = "Zero-trust multi-tenant semantic memory for AI agents (Google ADK, MCP) enforced by PostgreSQL pgvector and Row-Level Security (RLS)."
 readme = "README.md"
 license = "Apache-2.0"
