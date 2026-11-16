@@ -38,10 +38,13 @@ TOKEN_ENV = "MEMSHIELD_IDENTITY_TOKEN"
 
 
 def _request_headers(ctx: Any) -> Mapping[str, str] | None:
-    """HTTP headers of the current MCP request, or ``None`` (stdio, in-process calls)."""
+    """HTTP headers of the current MCP request, or ``None`` when there is no request context.
+
+    On the HTTP transport ``None`` makes the call fail closed; on stdio headers are ignored.
+    """
     try:
         return ctx.headers
-    except Exception:  # no active request context
+    except (AttributeError, LookupError, RuntimeError, ValueError):  # no active request context
         return None
 
 
@@ -60,7 +63,10 @@ def _bearer(headers: Mapping[str, str] | None) -> str | None:
 class MemShieldMcpTools:
     """The tool logic, independent of the MCP SDK (and directly testable).
 
-    ``headers`` is the HTTP request's headers, or ``None`` on stdio.
+    ``transport`` is fixed at construction. ``"http"`` requires an identity verifier and
+    takes the token only from the request's ``Authorization`` header (never from the
+    environment); a call without request headers is refused. ``"stdio"`` ignores headers
+    and uses ``MEMSHIELD_IDENTITY_TOKEN`` (with a verifier) or the trusted ``user_id``.
     """
 
     def __init__(
@@ -69,10 +75,15 @@ class MemShieldMcpTools:
         *,
         app_name: str,
         user_id: str | None = None,
+        transport: str = "stdio",
         environ: Mapping[str, str] | None = None,
     ) -> None:
         if not app_name or not app_name.strip():
             raise ValueError("app_name must be a non-empty string")
+        if transport not in ("stdio", "http"):
+            raise ValueError("transport must be 'stdio' or 'http'")
+        if transport == "http" and store.config.identity_verifier is None:
+            raise MemShieldConfigurationError("the HTTP transport needs an identity verifier")
         if store.config.identity_verifier is None and not user_id:
             raise MemShieldConfigurationError(
                 "without an identity verifier the MCP server serves one trusted local user: "
@@ -81,12 +92,13 @@ class MemShieldMcpTools:
         self.store = store
         self.app_name = app_name
         self.user_id = user_id
+        self.transport = transport
         self._environ = os.environ if environ is None else environ
 
     def _token_for(self, headers: Mapping[str, str] | None) -> str | None:
-        if headers is not None:  # HTTP request
-            if self.store.config.identity_verifier is None:
-                raise MemShieldIdentityError("HTTP requests need an identity verifier")
+        if self.transport == "http":
+            if headers is None:
+                raise MemShieldIdentityError("no HTTP request context: refusing the call")
             return _bearer(headers)
         return self._environ.get(TOKEN_ENV) or None
 
@@ -184,14 +196,19 @@ def create_mcp_server(
     app_name: str,
     user_id: str | None = None,
     name: str = "adk-memshield",
+    transport: str = "stdio",
 ) -> Any:
-    """Build an ``mcp.server.mcpserver.MCPServer`` exposing remember / recall / forget."""
+    """Build an ``mcp.server.mcpserver.MCPServer`` exposing remember / recall / forget.
+
+    ``transport`` must match how you run the server: ``"http"`` for streamable HTTP
+    (requires an identity verifier), ``"stdio"`` otherwise.
+    """
     try:
         from mcp.server.mcpserver import Context, MCPServer
     except ImportError as exc:  # pragma: no cover - exercised only without the extra
         raise ImportError("the MCP adapter needs the MCP SDK: pip install 'adk-memshield[mcp]'") from exc
 
-    tools = MemShieldMcpTools(store, app_name=app_name, user_id=user_id)
+    tools = MemShieldMcpTools(store, app_name=app_name, user_id=user_id, transport=transport)
     server = MCPServer(
         name=name,
         instructions=(
@@ -265,7 +282,7 @@ def main(argv: list[str] | None = None) -> int:
         config_kwargs["dsn"] = args.dsn
     store = MemShieldStore(MemShieldConfig(**config_kwargs))
     store.verify_rls_posture()
-    server = create_mcp_server(store, app_name=args.app, user_id=args.user)
+    server = create_mcp_server(store, app_name=args.app, user_id=args.user, transport=args.transport)
     if args.transport == "stdio":
         server.run("stdio")
     else:

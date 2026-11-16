@@ -96,7 +96,8 @@ class McpTarget:
     def __init__(self, pool: ConnectionPool, no_where: bool) -> None:
         cfg = MemShieldConfig(dsn=APP_DSN, top_k=50, simulate_missing_app_filter=no_where,
                               identity_verifier=HmacIdentityVerifier({"k": KEY}))
-        self.tools = MemShieldMcpTools(MemShieldStore(cfg, embed_fn=fake_embed, pool=pool), app_name=APP)
+        self.tools = MemShieldMcpTools(MemShieldStore(cfg, embed_fn=fake_embed, pool=pool), app_name=APP,
+                                       transport="http")
 
     @staticmethod
     def _headers(who: Caller) -> dict[str, str]:

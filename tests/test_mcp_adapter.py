@@ -78,9 +78,26 @@ async def test_stdio_verified_mode_reads_token_from_env(make_pool: Callable[...,
         await pinned.recall("note")
 
 
-async def test_http_headers_without_verifier_are_refused(make_pool: Callable[..., ConnectionPool]) -> None:
-    tools = MemShieldMcpTools(_store(make_pool(), verified=False), app_name=APP, user_id="alice")
-    with pytest.raises(MemShieldIdentityError, match="identity verifier"):
+def test_http_transport_needs_a_verifier(make_pool: Callable[..., ConnectionPool]) -> None:
+    with pytest.raises(MemShieldConfigurationError, match="identity verifier"):
+        MemShieldMcpTools(_store(make_pool(), verified=False), app_name=APP, user_id="alice",
+                          transport="http")
+
+
+async def test_http_transport_never_falls_back_to_env_or_trusted(
+    make_pool: Callable[..., ConnectionPool],
+) -> None:
+    tools = MemShieldMcpTools(_store(make_pool(), verified=True), app_name=APP, transport="http",
+                              environ={"MEMSHIELD_IDENTITY_TOKEN": _token("alice")})
+    with pytest.raises(MemShieldIdentityError, match="no HTTP request context"):
+        await tools.recall("x", headers=None)
+    with pytest.raises(MemShieldIdentityError, match="no identity token"):
+        await tools.recall("x", headers={})
+
+
+async def test_stdio_transport_ignores_headers(make_pool: Callable[..., ConnectionPool]) -> None:
+    tools = MemShieldMcpTools(_store(make_pool(), verified=True), app_name=APP, environ={})
+    with pytest.raises(MemShieldIdentityError, match="no identity token"):
         await tools.recall("x", headers={"Authorization": f"Bearer {_token('alice')}"})
 
 
@@ -101,7 +118,8 @@ def _rpc(client, method: str, params: dict, headers: dict[str, str], rid: int = 
 def test_streamable_http_end_to_end(make_pool: Callable[..., ConnectionPool]) -> None:
     from starlette.testclient import TestClient
 
-    server = create_mcp_server(_store(make_pool(max_size=2), verified=True), app_name=APP)
+    server = create_mcp_server(_store(make_pool(max_size=2), verified=True), app_name=APP,
+                               transport="http")
     app = server.streamable_http_app(stateless_http=True, json_response=True)
     alice = {"Authorization": f"Bearer {_token('alice')}"}
     bob = {"Authorization": f"Bearer {_token('bob')}"}
