@@ -12,9 +12,9 @@
 
 ## What changed in 0.2.0
 
-- **Recall no longer collapses with prepared statements + HNSW.** Every RLS transaction pins `plan_cache_mode = force_custom_plan`. Reported and measured by [Sunnatulla](https://dev.to/sunnatulla_dev/comment/3l7np); see [ANN indexes and RLS](#ann-indexes-hnsw-and-rls).
-- **Pooled connections are proven clean** after rollbacks, statement timeouts, killed backends and session-scoped `set_config` writes, and memshield's pools run `RESET ALL` on check-in.
-- **Refuses to run unprotected.** On first use memshield checks that the role is not a superuser and has no `BYPASSRLS`, that the table has forced RLS, and that the policies exist.
+- **Recall no longer collapses when a prepared statement switches to a generic plan** (prepared statements + an HNSW index). Every RLS transaction pins `plan_cache_mode = force_custom_plan`. Reported and measured by [Sunnatulla](https://dev.to/sunnatulla_dev/comment/3l7np); see [ANN indexes and RLS](#ann-indexes-hnsw-and-rls).
+- **Pooled connections are tested** after rollbacks, statement timeouts, killed backends, session-scoped `set_config`, `SET ROLE` and temporary tables, and memshield's pools reset session settings, role and temp tables on check-in. The table is always used under its schema-qualified name.
+- **Refuses to run unprotected.** On first use memshield checks that the role is not a superuser, has no `BYPASSRLS` and does not own the table, that the table has forced RLS, and that every command has a policy whose expressions check the tenant.
 - **Verified identity (optional).** Bind a signed token per request (`HmacIdentityVerifier`, or `JwtIdentityVerifier` for OIDC/JWKS) and tenant, clearance and compartments come from the token, so one service instance can serve every tenant.
 - **Compartments** add horizontal access (`hr`, `finance`, ...) on top of clearance.
 - **Framework-neutral core** (`MemShieldStore`), an **MCP server** (`memshield-mcp`), and a `pre_write` hook that can only tighten or block.
@@ -64,8 +64,8 @@ flowchart LR
 
 ### Security properties
 
-- **No superuser bypass, checked at runtime.** Superusers and `BYPASSRLS` roles ignore RLS even under `FORCE ROW LEVEL SECURITY`. [`sql/01_schema.sql`](https://github.com/aalishan001/adk-memshield/blob/main/sql/01_schema.sql) creates a least-privilege `memshield_app` role (`NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS`). Before the first operation on a pool, memshield reads `pg_roles`, `pg_class` and `pg_policy` and raises `MemShieldConfigurationError` if the role can bypass RLS, the table lacks forced RLS, a command has no policy, or a permissive policy does not check the tenant. Call `verify_rls_posture()` at startup to fail fast.
-- **Pool-safe identity.** Every operation runs in an explicit transaction and binds `app.current_app_name`, `app.current_tenant_id`, `app.current_user_id`, `app.agent_clearance`, `app.agent_compartments` and `plan_cache_mode` in one `set_config(..., true)` statement. PostgreSQL discards them at commit or rollback. memshield's own pools also run `RESET ALL` when a connection is returned (measured at about 0.48 ms per checkout), so a session-scoped `set_config` written by custom SQL cannot reach the next borrower. All values are bound parameters; the only interpolated identifier (`table_name`) is validated against `^[A-Za-z_][A-Za-z0-9_]*$`.
+- **No superuser bypass, checked at runtime.** Superusers and `BYPASSRLS` roles ignore RLS even under `FORCE ROW LEVEL SECURITY`. [`sql/01_schema.sql`](https://github.com/aalishan001/adk-memshield/blob/main/sql/01_schema.sql) creates a least-privilege `memshield_app` role (`NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS`). Before the first operation on a pool, memshield reads `pg_roles`, `pg_class` and `pg_policy` and raises `MemShieldConfigurationError` if the role can bypass RLS, owns the table (or is a member of its owner role, so it could disable RLS), the table lacks forced RLS, a command has no policy, or a permissive policy that applies to the role (directly, through PUBLIC or through role membership) has a `USING` or `WITH CHECK` expression that never references `app.current_tenant_id`. This is a configuration check, not a proof that every policy is correct. Call `verify_rls_posture()` at startup to fail fast.
+- **Pool-safe identity.** Every operation runs in an explicit transaction and binds `app.current_app_name`, `app.current_tenant_id`, `app.current_user_id`, `app.agent_clearance`, `app.agent_compartments` and `plan_cache_mode` in one `set_config(..., true)` statement. PostgreSQL discards them at commit or rollback. memshield's own pools also run `RESET ALL; RESET ROLE; DISCARD TEMP` when a connection is returned (measured at 0.58 ms per checkout, two round trips on local Docker), so session-scoped settings, a `SET ROLE` or a temporary table created by custom SQL cannot reach the next borrower. Advisory locks, `LISTEN` and `WITH HOLD` cursors are not reset: don't create them on the yielded cursor. The table is resolved once to its schema-qualified name (a temporary table can never shadow it; memshield refuses to run if the name resolves to one). All values are bound parameters; the only interpolated identifier (`table_name`) is validated against `^[A-Za-z_][A-Za-z0-9_]*$`.
 - **Fail-closed.** Without identity context a query sees 0 rows. Identity columns carry `CHECK (<col> <> '')` because a pooled connection reports `''` (not `NULL`) for a custom setting once it has been used, and the service rejects empty `app_name`/`user_id` before touching the database.
 - **All four commands are gated.** `SELECT` allows own rows plus `tenant_shared` rows with `min_clearance <= app.agent_clearance` that carry no compartments or share one with the caller. `INSERT` and `UPDATE` (`USING` + `WITH CHECK`) and `DELETE` (`USING`) are restricted to the caller's own rows, so cross-user poisoning or re-owning a row raises `InsufficientPrivilege`.
 - **No write-up, no write-across.** An agent cannot write a `tenant_shared` memory labelled above its own clearance, or tag any memory with a compartment it does not hold.
@@ -94,12 +94,12 @@ Retrieval latency (database transaction including `set_config`, 60 rows, ms):
 
 | Scenario | Unprotected p50 / p95 | `adk-memshield` p50 / p95 |
 | :--- | :---: | :---: |
-| Scenario 1: Shared-Tenant Pool (Incidental Overlap) | 1.09 / 1.54 | 1.15 / 1.68 |
-| Scenario 2: Adversarial Top-K Planted Lure | 1.12 / 1.69 | 1.14 / 1.63 |
-| Scenario 3: Tool-Argument `user_id` Override | 1.13 / 1.38 | 1.21 / 1.65 |
-| Scenario 4: Low-Clearance Swarm Agent (AgentLeak-style) | 1.07 / 1.60 | 1.14 / 1.67 |
-| Scenario 5: Total Filter Omission | 0.98 / 1.34 | 1.02 / 1.35 |
-| Control: Correct App Filter (no bug) | 1.13 / 1.72 | 1.13 / 1.76 |
+| Scenario 1: Shared-Tenant Pool (Incidental Overlap) | 1.48 / 2.04 | 1.57 / 2.89 |
+| Scenario 2: Adversarial Top-K Planted Lure | 1.48 / 2.05 | 1.61 / 2.26 |
+| Scenario 3: Tool-Argument `user_id` Override | 1.53 / 1.95 | 1.60 / 2.57 |
+| Scenario 4: Low-Clearance Swarm Agent (AgentLeak-style) | 1.63 / 2.21 | 1.63 / 2.39 |
+| Scenario 5: Total Filter Omission | 1.15 / 1.53 | 1.15 / 1.58 |
+| Control: Correct App Filter (no bug) | 1.29 / 1.87 | 1.45 / 2.00 |
 
 **How to read this**
 
@@ -121,26 +121,28 @@ The schema ships without a vector index. If you add one (HNSW or IVFFlat), read 
 
 **What goes wrong without plan pinning.** psycopg 3 prepares a statement after 5 executions on the same connection (asyncpg prepares everything). After 5 more executions PostgreSQL may switch the prepared statement to a cached *generic* plan, and the generic plan sticks to that connection. For `ORDER BY embedding <=> $1 LIMIT $2` the generic plan can be the HNSW index scan with the whole RLS policy applied afterwards as a filter. HNSW hands back only `hnsw.ef_search` (default 40) candidates, so a caller who can see only a few rows of a large table gets an **empty** result. Nothing leaks; recall fails silently, which looks like "no memories yet". This was reported and measured first by [Sunnatulla](https://dev.to/sunnatulla_dev/comment/3l7np) on PostgreSQL 17 (100k rows, asyncpg and psycopg 3).
 
-**What 0.2.0 does.** `rls_transaction` binds `set_config('plan_cache_mode', 'force_custom_plan', true)` in the same statement as the identity. It covers every query in the transaction, including custom SQL on the yielded cursor, and it overrides a generic plan already cached on the connection. The planner cannot see the user behind `current_setting()` anyway, so a generic plan saves nothing here.
+**What 0.2.0 does.** `rls_transaction` binds `set_config('plan_cache_mode', 'force_custom_plan', true)` in the same statement as the identity. It covers every parameterised statement in the transaction, including custom SQL on the yielded cursor, and it is checked at each execution, so a generic plan already cached on the connection is skipped. In a generic plan the query vector and the `LIMIT` are unknown parameters, so the planner can pick the HNSW scan with the RLS policy as a post-filter; a custom plan sees the actual vector and `LIMIT` on every execution. In this measurement the light user's custom plan is an exact parallel sequential scan plus sort. The price is re-planning on every execution.
 
 **Measured** with [`benchmarks/plan_cache_hnsw.py`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/plan_cache_hnsw.py): 100,000 rows in 3 tenants, clustered 384-d embeddings, HNSW (`vector_cosine_ops`, default build parameters), top 10, all 20 searches per row on **one** pinned connection (5 queries x 4 repeats). The light user sees 30 rows in a 33k-row tenant; the heavy user owns 30k of them. "RLS only" is the search with no `WHERE` clause, which is also the shape of custom SQL run under `rls_transaction()`. Recall is against an exact search.
 
-| Query shape | Plan cache | User | `hnsw.iterative_scan` | Empty results | Recall@10 (pg16) | Recall@10 (pg17) |
+| Query shape | Plan cache | User | `hnsw.iterative_scan` | Empty results (pg16 / pg17) | Recall@10 (pg16) | Recall@10 (pg17) |
 | :--- | :--- | :--- | :--- | ---: | ---: | ---: |
-| RLS only | 0.1.x (`auto`) | light | off | **10 of 20** | **0.50** | **0.50** |
-| RLS only | **0.2.0 (`force_custom_plan`)** | light | off | 0 of 20 | **1.00** | **1.00** |
-| RLS only | 0.1.x (`auto`) | light | `relaxed_order` | 0 of 20 | 0.82 | 0.78 |
-| RLS only | 0.2.0 | light | `relaxed_order` | 0 of 20 | 1.00 | 1.00 |
-| memshield's default search | 0.1.x and 0.2.0 | light | off | 0 of 20 | 1.00 | 1.00 |
-| RLS only / default search | 0.1.x and 0.2.0 | heavy | off | 0 of 20 | 0.84 | 0.82 |
-| RLS only | 0.2.0 | heavy | `relaxed_order` | 0 of 20 | 0.86 | 0.84 |
+| RLS only | 0.1.x (`auto`) | light | off | **10 / 10 of 20** | **0.50** | **0.50** |
+| RLS only | **0.2.0 (`force_custom_plan`)** | light | off | 0 / 0 of 20 | **1.00** | **1.00** |
+| RLS only | 0.1.x (`auto`) | light | `relaxed_order` | 0 / 0 of 20 | 0.85 | 0.84 |
+| RLS only | 0.2.0 | light | `relaxed_order` | 0 / 0 of 20 | 1.00 | 1.00 |
+| memshield's default search | 0.1.x and 0.2.0 | light | off | 0 / 0 of 20 | 1.00 | 1.00 |
+| RLS only / default search | 0.1.x and 0.2.0 | heavy | off | 0 / 0 of 20 | 0.84 | 0.80 |
+| RLS only | 0.2.0 | heavy | `relaxed_order` | 0 / 0 of 20 | 0.84 | 0.84 |
 
-Raw output, plans and per-search row counts: [`plan-cache-hnsw-pg16-100k.txt`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/runs/2026-11-16/plan-cache-hnsw-pg16-100k.txt) (PostgreSQL 16.15) and [`plan-cache-hnsw-pg17-100k.txt`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/runs/2026-11-16/plan-cache-hnsw-pg17-100k.txt) (PostgreSQL 17.12), both pgvector 0.8.7. On one connection the 0.1.x RLS-only searches return 10 rows for searches 1 to 10 and 0 rows from the 11th on.
+Raw output, plans and per-search row counts: [`plan-cache-hnsw-pg16-100k.txt`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/runs/2026-11-16/plan-cache-hnsw-pg16-100k.txt) (PostgreSQL 16.15) and [`plan-cache-hnsw-pg17-100k.txt`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/runs/2026-11-16/plan-cache-hnsw-pg17-100k.txt) (PostgreSQL 17.12), both pgvector 0.8.7. On one connection the light user's 0.1.x RLS-only searches return 10 rows for searches 1 to 10 and 0 rows from the 11th on.
 
 **Remaining guidance.**
 
+- The pin stops the switch to a generic plan; it does not stop HNSW post-filtering. A custom plan can still be an HNSW scan with the policy applied afterwards: on PostgreSQL 17 the heavy user still got 9 rows instead of 10 on 8 of 20 searches with the pin, and callers with mid-range visibility (not measured here) can get fewer than `top_k` rows. For the light user the pin restores recall because the planner chooses an exact scan, whose cost grows with the table (RLS-only light p50 42.4 ms pinned vs 21.0 ms unpinned on pg16).
+
 - memshield's own search was **not** affected in this measurement: its application filter (`user_id = $3 ...`) keeps the generic plan off the HNSW index. Custom SQL under `rls_transaction()` and the `simulate_missing_app_filter` path were affected. 0.2.0 pins the plan for all of them.
-- The heavy user's recall below 1.0 is HNSW's approximation (and its post-filter dropping candidates from other tenants), not RLS. For callers who can see most of a large table, enable pgvector iterative scans for the app role, e.g. `ALTER ROLE memshield_app IN DATABASE mydb SET hnsw.iterative_scan = 'relaxed_order';` (a role default survives the pool's `RESET ALL`), and tune `hnsw.ef_search`.
+- The heavy user's recall below 1.0 is HNSW's approximation plus the RLS/application filter applied after the index returns `hnsw.ef_search` candidates. For callers who can see most of a large table, enable pgvector iterative scans for the app role, e.g. `ALTER ROLE memshield_app IN DATABASE mydb SET hnsw.iterative_scan = 'relaxed_order';` (a role default survives the pool's `RESET ALL`), and tune `hnsw.ef_search`.
 - For very large tenants, consider list-partitioning `memories` by tenant so each tenant's index holds only its own rows.
 - Benchmark recall at your own scale before relying on an ANN index.
 
@@ -151,9 +153,13 @@ Raw output, plans and per-search row counts: [`plan-cache-hnsw-pg16-100k.txt`](h
 - **What RLS protects against:** bugs and omissions in application retrieval SQL, prompt-injected tool arguments, and cross-user writes, all *while the service binds the correct identity*. With an identity verifier, a wrong or spoofed `user_id` from the application or a tool argument is refused before it reaches the database.
 - **What it does not protect against:** a compromised application process. `memshield_app` can call `set_config` itself, so code holding the database credentials can claim any identity; code holding both the credentials and the token signing key can mint any identity. Keep identity binding inside this service and keep credentials and keys out of agent-reachable code paths.
 - **Trusted caller mode (no verifier) takes tenant, clearance and compartments from the service config.** ADK's `search_memory` receives only `app_name`/`user_id`, so in that mode run one service instance per tenant/clearance tier (or per Runner). With a verifier they come from the token and one instance serves everyone.
+- **Owners read their own rows at any label.** The SELECT policy lets a caller read every row it owns, whatever its clearance or compartments; a low-clearance agent acting for a user can read that user's high-clearance shared rows. It cannot relabel them: `UPDATE` only touches shared rows labelled within the agent's own clearance and compartments. If agents of different clearance act for the same user, give them different user ids.
+- **Labels can come from the model.** `scope`, `min_clearance` and `compartments` arrive in memory metadata, `session.state` or the MCP `remember(shared=...)` argument. A prompt injection can ask to publish a memory tenant-wide (always within the writer's own clearance and compartments). Use a `pre_write` hook to enforce your own labelling policy.
 - **`tenant_shared` content is trusted by design.** A user may publish a `tenant_shared` memory at or below their own clearance and within their compartments, and every agent entitled to read it will retrieve it. RLS enforces *who may read*, not whether the content is benign. The `pre_write` hook is the seam for a content check (it may only tighten or block).
 - **ANN indexes:** see [ANN indexes (HNSW) and RLS](#ann-indexes-hnsw-and-rls).
-- **Your own pool:** if you pass `pool=`, create it with `reset=adk_memshield.reset_connection`, or custom SQL that writes a session-scoped `app.*` setting could reach the next raw borrower of that connection (memshield itself always rebinds every key).
+- **Your own pool:** if you pass `pool=`, create it with `reset=adk_memshield.reset_connection`, or session state left by custom SQL could reach the next raw borrower of that connection (memshield itself always rebinds every key and uses the schema-qualified table).
+- **JWT issuers:** `JwtIdentityVerifier` requires `issuer=`. A JWKS shared by many issuers (multi-tenant Entra ID, the Firebase key set) would otherwise accept tokens minted for another tenant or project. Prefer an `audience` your identity provider owns over the ADK app name.
+- **MCP transport** is fixed when the server is built: the HTTP transport takes identity only from the `Authorization` header and refuses a call without one; stdio ignores headers.
 - `sql/02_benchmark_baseline.sql` creates an intentionally unprotected table for tests and benchmarks. **Do not apply it in production.** memshield refuses to use it unless `allow_insecure_role=True`, which logs a warning on every use.
 
 ---
@@ -245,7 +251,7 @@ with bind_identity(token):
         ...
 ```
 
-With `JwtIdentityVerifier(jwks_url=...)` (`adk-memshield[jwt]`), the token can come from Firebase Auth, Google Cloud Identity Platform or any OIDC provider; tenant, clearance and compartments are read from the `tenant`, `clearance` and `compartments` claims (configurable). No token, an invalid or expired token, a token for another `app_name`, or an ADK `user_id` that differs from the token subject raises `MemShieldIdentityError`. Tokens are never logged.
+With `JwtIdentityVerifier(jwks_url=..., issuer=...)` (`adk-memshield[jwt]`), the token can come from Firebase Auth, Google Cloud Identity Platform or any OIDC provider; tenant, clearance and compartments are read from the `tenant`, `clearance` and `compartments` claims (configurable). No token, an invalid or expired token, a token for another `app_name`, or an ADK `user_id` that differs from the token subject raises `MemShieldIdentityError`. Tokens are never logged.
 
 ### 4. Write and search memories directly
 
@@ -342,8 +348,11 @@ memory_service = get_service_registry().create_memory_service(
 ## Upgrading from 0.1.x
 
 1. Apply [`sql/migrations/0.1_to_0.2.sql`](https://github.com/aalishan001/adk-memshield/blob/main/sql/migrations/0.1_to_0.2.sql) as the table owner, in one transaction: `psql "$ADMIN_DSN" -v ON_ERROR_STOP=1 --single-transaction -f sql/migrations/0.1_to_0.2.sql`. It is idempotent. It adds `compartments` (existing rows get `{}` and keep exactly their 0.1.x visibility), a GIN index, and recreates the four policies.
-2. Upgrade the package. The ADK API is unchanged. New: the service now refuses an RLS-bypassing role or an unprotected table (`MemShieldConfigurationError`); benchmarks against an intentionally unprotected table need `allow_insecure_role=True`.
-3. If you pass your own `pool=`, add `reset=adk_memshield.reset_connection`.
+   **Locking:** `ALTER TABLE` takes an `ACCESS EXCLUSIVE` lock, and in one transaction it is held while the `CHECK` constraint scans the table and the GIN index is built, so reads and writes on `memories` wait for the whole migration (the file sets `lock_timeout = '10s'` so it fails instead of queueing). On a large table, run it in a quiet window, or first add the constraint `NOT VALID` and `VALIDATE` it separately and create the index `CONCURRENTLY` outside a transaction; the migration then skips both.
+2. Upgrade the package. The ADK API is unchanged. New: the service refuses an RLS-bypassing role, a role that owns the table, an unprotected table, or a permissive policy that never checks the tenant (`MemShieldConfigurationError`). Policies granted to a group role the app role belongs to now count. Benchmarks against an intentionally unprotected table need `allow_insecure_role=True`.
+3. If you pass your own `pool=`, add `reset=adk_memshield.reset_connection`. It also clears session `SET`s made in a pool `configure=` callback after the first check-in; put those in the DSN `options` or `ALTER ROLE ... SET`.
+4. Cost: every operation re-plans its statements (`force_custom_plan`), and memshield's pools run three reset statements and a commit on check-in.
+5. `JwtIdentityVerifier` (new) requires `issuer=`; `rls_transaction` always resolves (and verifies) the identity.
 
 ---
 
@@ -353,7 +362,7 @@ All containers use compose project `adk-memshield`; Postgres 16 is on host port 
 
 ```bash
 docker compose -p adk-memshield up -d --wait db
-docker compose -p adk-memshield run --rm test pytest -v              # 104 tests
+docker compose -p adk-memshield run --rm test pytest -v              # 121 tests
 docker compose -p adk-memshield run --rm test pytest -v -m slow      # 50k-row HNSW plan-cache test
 docker compose -p adk-memshield run --rm test python benchmarks/run_memleak_eval.py
 docker compose -p adk-memshield run --rm test python benchmarks/plan_cache_hnsw.py --rows 100000 --repeats 4
