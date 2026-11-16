@@ -1,0 +1,17 @@
+# adk-memshield 0.2.0 installed from PyPI in a clean python:3.12-slim container
+# pip install --index-url https://pypi.org/simple 'adk-memshield[jwt,mcp]==0.2.0' pytest pytest-asyncio
+# PyPI sha256: wheel 7a64d2bc256d959ae382c1cedd8904a7b3bbfa1064b4c90c9c608c1343ace53d sdist 994b871bb183611218d730018601a01b8158d3568a1ad138441dddd1f0c8d3bb (match GitHub Release assets)
+Name: adk-memshield
+Version: 0.2.0
+Summary: Zero-trust multi-tenant semantic memory for AI agents (Google ADK, MCP) enforced by PostgreSQL pgvector and Row-Level Security (RLS).
+/usr/local/lib/python3.12/site-packages/adk_memshield/__init__.py
+adk-memshield 0.2.0 0.2.0
+ids ['1b122a2e-4b85-49cc-8f19-11656137aa6e']
+deleted 0
+u1 rows 1 u2 rows 0
+plan_cache_mode force_custom_plan
+telemetry {'app.current_app_name': 'smoke', 'app.current_tenant_id': 'smoke_t', 'app.current_user_id': 'u2', 'app.agent_clearance': '1', 'app.agent_compartments': '', 'plan_cache_mode': 'force_custom_plan'}
+cleanup 1
+........................................................................ [ 59%]
+...........s......................................                       [100%]
+121 passed, 1 skipped in 26.36s
