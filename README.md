@@ -1,6 +1,6 @@
 # `adk-memshield`
 
-**Zero-trust multi-tenant semantic memory for Google ADK (`google-adk`), enforced in the database by PostgreSQL `pgvector` + Row-Level Security (RLS).**
+**Zero-trust multi-tenant semantic memory for AI agents, enforced in the database by PostgreSQL `pgvector` + Row-Level Security (RLS). A drop-in memory service for Google ADK (`google-adk`), a framework-neutral core, and an MCP server.**
 
 [![PyPI](https://img.shields.io/pypi/v/adk-memshield)](https://pypi.org/project/adk-memshield/)
 [![Python](https://img.shields.io/pypi/pyversions/adk-memshield)](https://pypi.org/project/adk-memshield/)
@@ -10,16 +10,28 @@
 
 ---
 
+## What changed in 0.2.0
+
+- **Recall no longer collapses with prepared statements + HNSW.** Every RLS transaction pins `plan_cache_mode = force_custom_plan`. Reported and measured by [Sunnatulla](https://dev.to/sunnatulla_dev/comment/3l7np); see [ANN indexes and RLS](#ann-indexes-hnsw-and-rls).
+- **Pooled connections are proven clean** after rollbacks, statement timeouts, killed backends and session-scoped `set_config` writes, and memshield's pools run `RESET ALL` on check-in.
+- **Refuses to run unprotected.** On first use memshield checks that the role is not a superuser and has no `BYPASSRLS`, that the table has forced RLS, and that the policies exist.
+- **Verified identity (optional).** Bind a signed token per request (`HmacIdentityVerifier`, or `JwtIdentityVerifier` for OIDC/JWKS) and tenant, clearance and compartments come from the token, so one service instance can serve every tenant.
+- **Compartments** add horizontal access (`hr`, `finance`, ...) on top of clearance.
+- **Framework-neutral core** (`MemShieldStore`), an **MCP server** (`memshield-mcp`), and a `pre_write` hook that can only tighten or block.
+- Upgrading from 0.1.x: [apply the migration](#upgrading-from-01x). The public ADK API is unchanged.
+
+---
+
 ## Why `adk-memshield`?
 
-Multi-tenant and multi-agent `google-adk` deployments often keep long-term semantic memory in one shared vector table, with isolation enforced only by the `WHERE` clause the application remembers to write. That design leaks in two well-documented ways:
+Multi-tenant and multi-agent deployments often keep long-term semantic memory in one shared vector table, with isolation enforced only by the `WHERE` clause the application remembers to write. That design leaks in two well-documented ways:
 
-1. **Cross-user semantic leakage** — *MemLeak: Cross-User Semantic Leakage in Multi-Tenant AI Agent Memory* ([arXiv:2610.04195](https://arxiv.org/abs/2610.04195)) shows that similarity search over a pooled store surfaces other users' memories without any exploit, and that hard ownership gating is the mitigation that consistently restores the clean baseline.
-2. **Lateral leakage inside agent swarms** — *AgentLeak* ([arXiv:2602.11510](https://arxiv.org/abs/2602.11510)) shows that internal channels between agents are a major leakage path. `adk-memshield` addresses the memory-retrieval slice of that problem: a low-clearance sub-agent must not retrieve shared tenant memories labelled above its clearance.
+1. **Cross-user semantic leakage**: *MemLeak: Cross-User Semantic Leakage in Multi-Tenant AI Agent Memory* ([arXiv:2610.04195](https://arxiv.org/abs/2610.04195)) shows that similarity search over a pooled store surfaces other users' memories without any exploit, and that hard ownership gating is the mitigation that consistently restores the clean baseline.
+2. **Lateral leakage inside agent swarms**: *AgentLeak* ([arXiv:2602.11510](https://arxiv.org/abs/2602.11510)) shows that internal channels between agents are a major leakage path. `adk-memshield` addresses the memory-retrieval slice of that problem: a low-clearance sub-agent must not retrieve shared tenant memories labelled above its clearance.
 
-`adk-memshield` is a drop-in `BaseMemoryService` that moves ownership gating out of application code and into PostgreSQL itself, using **`FORCE ROW LEVEL SECURITY`** and **transaction-local identity (`set_config(..., true)`)**. A retrieval query with a missing or wrong filter returns fewer rows, not someone else's rows.
+`adk-memshield` moves ownership gating out of application code and into PostgreSQL, using **`FORCE ROW LEVEL SECURITY`** and **transaction-local identity (`set_config(..., true)`)**. A retrieval query with a missing or wrong filter returns only rows the caller is entitled to (their own, plus tenant-shared rows at or below their clearance and within their compartments), never anyone else's.
 
-![adk-leak-arena console: the same no-WHERE query leaks cross-tenant rows from an unprotected table and returns only the caller's rows from adk-memshield](https://raw.githubusercontent.com/aalishan001/adk-leak-arena/main/docs/assets/console-overview.png)
+![adk-leak-arena console: the same no-WHERE query leaks cross-tenant rows from an unprotected table, while adk-memshield returns only rows the caller is entitled to](https://raw.githubusercontent.com/aalishan001/adk-leak-arena/main/docs/assets/console-overview.png)
 
 *Live side-by-side comparison in the companion red-team console, [adk-leak-arena](https://github.com/aalishan001/adk-leak-arena) (`pip install adk-leak-arena`).*
 
@@ -29,45 +41,44 @@ Multi-tenant and multi-agent `google-adk` deployments often keep long-term seman
 
 ```mermaid
 flowchart LR
-    subgraph ADK["Google ADK Runtime"]
-        Agent["ADK Agent / Sub-Agent<br/>(app_name, user_id from Runner)"]
-        Service["MemShieldMemoryService<br/>(BaseMemoryService)<br/>tenant_id + clearance from config"]
-        Embedder["MemShieldEmbedder<br/>(FastEmbed bge-small-en-v1.5, 384d)"]
+    subgraph Callers["Callers"]
+        Agent["Google ADK Runner<br/>MemShieldMemoryService"]
+        MCP["MCP client<br/>memshield-mcp"]
+        App["Any Python app<br/>MemShieldStore"]
     end
 
-    subgraph PG["PostgreSQL 16 + pgvector (role memshield_app, NOBYPASSRLS)"]
-        Tx["Explicit transaction"]
-        Ctx["Transaction-local identity<br/>set_config('app.*', val, true)"]
+    Core["MemShieldStore (core)<br/>identity: trusted config or verified token<br/>pre_write hook, embedder"]
+
+    subgraph PG["PostgreSQL + pgvector (role memshield_app, NOSUPERUSER NOBYPASSRLS)"]
+        Posture["Posture check (once per pool)<br/>role, FORCE RLS, policies"]
+        Ctx["One statement per transaction<br/>set_config('app.*', val, true)<br/>set_config('plan_cache_mode', 'force_custom_plan', true)"]
         RLS["RLS policies<br/>SELECT / INSERT / UPDATE / DELETE"]
-        Vec[("memories<br/>vector(384)")]
+        Vec[("memories<br/>vector(384), compartments text[]")]
     end
 
-    Agent --> Service
-    Service --> Embedder
-    Service --> Tx
-    Tx --> Ctx
-    Ctx --> RLS
-    RLS --> Vec
+    Agent --> Core
+    MCP --> Core
+    App --> Core
+    Core --> Posture --> Ctx --> RLS --> Vec
 ```
 
 ### Security properties
 
-- **No superuser bypass.** Superusers and `BYPASSRLS` roles ignore RLS even under `FORCE ROW LEVEL SECURITY`. [`sql/01_schema.sql`](https://github.com/aalishan001/adk-memshield/blob/main/sql/01_schema.sql) creates a least-privilege `memshield_app` role (`NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS`); connect with it.
-- **Pool-safe identity.** Every operation runs in an explicit transaction and binds `app.current_app_name`, `app.current_tenant_id`, `app.current_user_id` and `app.agent_clearance` with `set_config(..., true)`. The settings vanish at commit/rollback, so identity never bleeds into the next pooled checkout. All values are bound parameters; the only interpolated identifier (`table_name`) is validated against `^[A-Za-z_][A-Za-z0-9_]*$`.
+- **No superuser bypass, checked at runtime.** Superusers and `BYPASSRLS` roles ignore RLS even under `FORCE ROW LEVEL SECURITY`. [`sql/01_schema.sql`](https://github.com/aalishan001/adk-memshield/blob/main/sql/01_schema.sql) creates a least-privilege `memshield_app` role (`NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS`). Before the first operation on a pool, memshield reads `pg_roles`, `pg_class` and `pg_policy` and raises `MemShieldConfigurationError` if the role can bypass RLS, the table lacks forced RLS, a command has no policy, or a permissive policy does not check the tenant. Call `verify_rls_posture()` at startup to fail fast.
+- **Pool-safe identity.** Every operation runs in an explicit transaction and binds `app.current_app_name`, `app.current_tenant_id`, `app.current_user_id`, `app.agent_clearance`, `app.agent_compartments` and `plan_cache_mode` in one `set_config(..., true)` statement. PostgreSQL discards them at commit or rollback. memshield's own pools also run `RESET ALL` when a connection is returned (measured at about 0.48 ms per checkout), so a session-scoped `set_config` written by custom SQL cannot reach the next borrower. All values are bound parameters; the only interpolated identifier (`table_name`) is validated against `^[A-Za-z_][A-Za-z0-9_]*$`.
 - **Fail-closed.** Without identity context a query sees 0 rows. Identity columns carry `CHECK (<col> <> '')` because a pooled connection reports `''` (not `NULL`) for a custom setting once it has been used, and the service rejects empty `app_name`/`user_id` before touching the database.
-- **All four commands are gated.** `SELECT` allows own rows plus `tenant_shared` rows with `min_clearance <= app.agent_clearance`. `INSERT` and `UPDATE` (`USING` + `WITH CHECK`) and `DELETE` (`USING`) are restricted to the caller's own rows, so cross-user poisoning or re-owning a row raises `InsufficientPrivilege`.
-- **No write-up.** An agent cannot write a `tenant_shared` memory labelled above its own clearance, so a Tier-1 agent cannot plant "executive" context that higher-clearance agents would trust.
-- **Defense in depth.** The library's own query also filters by user/scope/clearance, mirroring the policy, so neither layer is a single point of failure. Ownership columns always come from call arguments and config, never from caller-supplied metadata.
+- **All four commands are gated.** `SELECT` allows own rows plus `tenant_shared` rows with `min_clearance <= app.agent_clearance` that carry no compartments or share one with the caller. `INSERT` and `UPDATE` (`USING` + `WITH CHECK`) and `DELETE` (`USING`) are restricted to the caller's own rows, so cross-user poisoning or re-owning a row raises `InsufficientPrivilege`.
+- **No write-up, no write-across.** An agent cannot write a `tenant_shared` memory labelled above its own clearance, or tag any memory with a compartment it does not hold.
+- **Verified identity (optional).** With an `identity_verifier`, every operation needs a token bound with `bind_identity(token)`; the framework's `user_id` must equal the token subject, so a prompt-injected or buggy `user_id` argument is refused instead of trusted.
+- **Defense in depth.** The library's own query mirrors the SELECT policy, so neither layer is a single point of failure. Ownership columns always come from the resolved identity, never from caller-supplied metadata.
 - **Idempotent session ingestion.** ADK may call `add_session_to_memory` repeatedly for one session; a unique index on `(owner, session_id, event_id)` stores each event once.
-- **Non-blocking.** Embedding and database I/O run in a worker thread (`asyncio.to_thread`), so memory calls do not stall the ADK event loop.
+- **Non-blocking.** Embedding and database I/O run in a worker thread (`asyncio.to_thread`), which inherits the caller's bound identity.
 
 ---
 
 ## Benchmark: unprotected `pgvector` vs. `adk-memshield`
 
-> **Provenance:** this repo's 8/8 integration tests and the adk-leak-arena headline numbers (97.5% to 0.0% cross-boundary leak rate, 86.4% to 100.0% Recall@3, 54 queries, the 2,000-row query plans) are re-run, with commands, commits, environment and raw output, in [adk-leak-arena/BENCHMARKS.md](https://github.com/aalishan001/adk-leak-arena/blob/main/BENCHMARKS.md). The table below comes from this repo's own `run_memleak_eval.py` (a different dataset and query set) and is not re-verified there.
-
-[`benchmarks/run_memleak_eval.py`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/run_memleak_eval.py) seeds a synthetic enterprise corpus (**3 tenants, 6 users, 60 memories**: API credentials, compensation, medical/HR records, query-shaped lure memories, and L3/L4 executive memos) into an ordinary table and into the RLS table. Each scenario runs **the same buggy application-layer SQL** against both, inside the same transaction-local identity of the authenticated caller, so the only variable is whether the database enforces ownership. `top_k=3`, 75 queries, 5 repeats.
+[`benchmarks/run_memleak_eval.py`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/run_memleak_eval.py) seeds a synthetic enterprise corpus (**3 tenants, 6 users, 60 memories**: API credentials, compensation, medical/HR records, query-shaped lure memories, and L3/L4 executive memos) into an ordinary table and into the RLS table. Each scenario runs **the same buggy application-layer SQL** against both, inside the same transaction-local identity of the authenticated caller, so the only variable is whether the database enforces ownership. `top_k=3`, 75 queries, 5 repeats. Raw output: [`benchmarks/runs/2026-11-16/memleak-eval-pg16.txt`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/runs/2026-11-16/memleak-eval-pg16.txt) (PostgreSQL 16.15, pgvector 0.8.7).
 
 | Scenario | Application-layer mistake | Queries | Unprotected: queries leaking | Unprotected: leaked share of top-k rows | Unprotected: leak at rank 1 | `adk-memshield`: queries leaking | Unprotected clean recall | `adk-memshield` clean recall |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -83,33 +94,67 @@ Retrieval latency (database transaction including `set_config`, 60 rows, ms):
 
 | Scenario | Unprotected p50 / p95 | `adk-memshield` p50 / p95 |
 | :--- | :---: | :---: |
-| Scenario 1: Shared-Tenant Pool (Incidental Overlap) | 0.74 / 1.19 | 0.78 / 1.38 |
-| Scenario 2: Adversarial Top-K Planted Lure | 0.79 / 1.27 | 0.72 / 1.45 |
-| Scenario 3: Tool-Argument `user_id` Override | 0.83 / 1.35 | 0.84 / 1.42 |
-| Scenario 4: Low-Clearance Swarm Agent (AgentLeak-style) | 0.80 / 1.24 | 0.91 / 1.60 |
-| Scenario 5: Total Filter Omission | 0.72 / 1.22 | 0.73 / 1.22 |
-| Control: Correct App Filter (no bug) | 0.76 / 1.53 | 0.78 / 1.39 |
+| Scenario 1: Shared-Tenant Pool (Incidental Overlap) | 1.09 / 1.54 | 1.15 / 1.68 |
+| Scenario 2: Adversarial Top-K Planted Lure | 1.12 / 1.69 | 1.14 / 1.63 |
+| Scenario 3: Tool-Argument `user_id` Override | 1.13 / 1.38 | 1.21 / 1.65 |
+| Scenario 4: Low-Clearance Swarm Agent (AgentLeak-style) | 1.07 / 1.60 | 1.14 / 1.67 |
+| Scenario 5: Total Filter Omission | 0.98 / 1.34 | 1.02 / 1.35 |
+| Control: Correct App Filter (no bug) | 1.13 / 1.72 | 1.13 / 1.76 |
 
 **How to read this**
 
 - **Leak rate is saturated by design of fixed top-k.** With no similarity floor, `LIMIT 3` always fills its slots. When a caller has fewer than three relevant rows of their own, a buggy filter fills the remainder with other people's rows, so every buggy query leaked at least one row. The *leaked share* and *rank-1* columns show how much of the retrieved context was unauthorized.
 - **RLS removed every unauthorized row in every scenario**, while the identical buggy SQL leaked on the plain table. The control row confirms the leak classifier reports 0% when the application filter is correct.
-- **Planted lures hijack rank 1, not recall.** Each Scenario 2 lure restates the target question followed by a short malicious payload (a white-box, PoisonedRAG-style attacker who knows the query wording). On the plain table a lure took rank 1 in 58.3% of queries: every roadmap/SLA query, but only 1 of 3 vendor queries and none of the API/KMS queries, where the victim's own note already restates the question almost verbatim. With RLS the lures are never retrieved.
-- **Recall gains are modest and specific.** In Scenarios 1, 2 and 4 the caller's own answer still made the top 3 on the plain table, so RLS changed *what else* was in context (and what ranked first) rather than recall. The recall gain appears under total filter omission (72.7% → 100%), where cross-tenant near-duplicates and lures crowd out the caller's own memories.
-- **Scenario 3 has no authorized answer.** The queries are pure exfiltration attempts, so recall is n/a. RLS turns the attack into an empty or own-rows-only result; it cannot repair the application's wrong `user_id` argument.
-- **Latency.** At 60 rows the RLS overhead is within run-to-run noise. This benchmark does not measure ANN index behaviour at scale (see Limitations).
+- **Planted lures hijack rank 1, not recall.** Each Scenario 2 lure restates the target question followed by a short malicious payload (a white-box, PoisonedRAG-style attacker who knows the query wording). On the plain table a lure took rank 1 in 58.3% of queries. With RLS the lures are never retrieved.
+- **Recall gains are modest and specific.** The recall gain appears under total filter omission (72.7% to 100%), where cross-tenant near-duplicates and lures crowd out the caller's own memories.
+- **Scenario 3 has no authorized answer.** The queries are pure exfiltration attempts, so recall is n/a. RLS turns the attack into an own-rows-only result; with a verified identity token the spoofed `user_id` is refused outright.
+- **Latency.** At 60 rows the RLS overhead is within run-to-run noise.
 - The corpus and queries are synthetic and hand-written. Treat the numbers as a reproducible illustration of failure modes, not as an estimate of real-world leak rates.
+
+The companion [adk-leak-arena](https://github.com/aalishan001/adk-leak-arena) runs a larger attack suite against live ADK agents; its numbers live in its own [BENCHMARKS.md](https://github.com/aalishan001/adk-leak-arena/blob/main/BENCHMARKS.md).
+
+---
+
+## ANN indexes (HNSW) and RLS
+
+The schema ships without a vector index. If you add one (HNSW or IVFFlat), read this.
+
+**What goes wrong without plan pinning.** psycopg 3 prepares a statement after 5 executions on the same connection (asyncpg prepares everything). After 5 more executions PostgreSQL may switch the prepared statement to a cached *generic* plan, and the generic plan sticks to that connection. For `ORDER BY embedding <=> $1 LIMIT $2` the generic plan can be the HNSW index scan with the whole RLS policy applied afterwards as a filter. HNSW hands back only `hnsw.ef_search` (default 40) candidates, so a caller who can see only a few rows of a large table gets an **empty** result. Nothing leaks; recall fails silently, which looks like "no memories yet". This was reported and measured first by [Sunnatulla](https://dev.to/sunnatulla_dev/comment/3l7np) on PostgreSQL 17 (100k rows, asyncpg and psycopg 3).
+
+**What 0.2.0 does.** `rls_transaction` binds `set_config('plan_cache_mode', 'force_custom_plan', true)` in the same statement as the identity. It covers every query in the transaction, including custom SQL on the yielded cursor, and it overrides a generic plan already cached on the connection. The planner cannot see the user behind `current_setting()` anyway, so a generic plan saves nothing here.
+
+**Measured** with [`benchmarks/plan_cache_hnsw.py`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/plan_cache_hnsw.py): 100,000 rows in 3 tenants, clustered 384-d embeddings, HNSW (`vector_cosine_ops`, default build parameters), top 10, all 20 searches per row on **one** pinned connection (5 queries x 4 repeats). The light user sees 30 rows in a 33k-row tenant; the heavy user owns 30k of them. "RLS only" is the search with no `WHERE` clause, which is also the shape of custom SQL run under `rls_transaction()`. Recall is against an exact search.
+
+| Query shape | Plan cache | User | `hnsw.iterative_scan` | Empty results | Recall@10 (pg16) | Recall@10 (pg17) |
+| :--- | :--- | :--- | :--- | ---: | ---: | ---: |
+| RLS only | 0.1.x (`auto`) | light | off | **10 of 20** | **0.50** | **0.50** |
+| RLS only | **0.2.0 (`force_custom_plan`)** | light | off | 0 of 20 | **1.00** | **1.00** |
+| RLS only | 0.1.x (`auto`) | light | `relaxed_order` | 0 of 20 | 0.82 | 0.78 |
+| RLS only | 0.2.0 | light | `relaxed_order` | 0 of 20 | 1.00 | 1.00 |
+| memshield's default search | 0.1.x and 0.2.0 | light | off | 0 of 20 | 1.00 | 1.00 |
+| RLS only / default search | 0.1.x and 0.2.0 | heavy | off | 0 of 20 | 0.84 | 0.82 |
+| RLS only | 0.2.0 | heavy | `relaxed_order` | 0 of 20 | 0.86 | 0.84 |
+
+Raw output, plans and per-search row counts: [`plan-cache-hnsw-pg16-100k.txt`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/runs/2026-11-16/plan-cache-hnsw-pg16-100k.txt) (PostgreSQL 16.15) and [`plan-cache-hnsw-pg17-100k.txt`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/runs/2026-11-16/plan-cache-hnsw-pg17-100k.txt) (PostgreSQL 17.12), both pgvector 0.8.7. On one connection the 0.1.x RLS-only searches return 10 rows for searches 1 to 10 and 0 rows from the 11th on.
+
+**Remaining guidance.**
+
+- memshield's own search was **not** affected in this measurement: its application filter (`user_id = $3 ...`) keeps the generic plan off the HNSW index. Custom SQL under `rls_transaction()` and the `simulate_missing_app_filter` path were affected. 0.2.0 pins the plan for all of them.
+- The heavy user's recall below 1.0 is HNSW's approximation (and its post-filter dropping candidates from other tenants), not RLS. For callers who can see most of a large table, enable pgvector iterative scans for the app role, e.g. `ALTER ROLE memshield_app IN DATABASE mydb SET hnsw.iterative_scan = 'relaxed_order';` (a role default survives the pool's `RESET ALL`), and tune `hnsw.ef_search`.
+- For very large tenants, consider list-partitioning `memories` by tenant so each tenant's index holds only its own rows.
+- Benchmark recall at your own scale before relying on an ANN index.
 
 ---
 
 ## Threat model & limitations
 
-- **What RLS protects against:** bugs and omissions in application retrieval SQL, prompt-injected tool arguments, and cross-user writes, all *while the service binds the correct identity*.
-- **What it does not protect against:** a compromised application process. `memshield_app` can call `set_config` itself, so code holding the database credentials can claim any identity. Keep identity binding inside this service and keep credentials out of agent-reachable code paths.
-- **Tenant and clearance come from service config, not from the ADK session.** `search_memory` receives only `app_name`/`user_id` from ADK, so run one service instance per tenant/clearance tier (or per Runner).
-- **`tenant_shared` content is trusted by design.** A user may publish a `tenant_shared` memory at or below their own clearance, and every agent in the tenant with sufficient clearance can retrieve it. RLS enforces *who may read*, not whether the content is benign.
-- **ANN indexes and RLS.** The schema ships without a vector index. If you add HNSW/IVFFlat, RLS filters rows *after* the index scan and can return fewer than `top_k` rows. Use pgvector ≥ 0.8 iterative index scans (`SET hnsw.iterative_scan = relaxed_order`) and benchmark recall at your scale.
-- `sql/02_benchmark_baseline.sql` creates an intentionally unprotected table for tests and benchmarks. **Do not apply it in production.**
+- **What RLS protects against:** bugs and omissions in application retrieval SQL, prompt-injected tool arguments, and cross-user writes, all *while the service binds the correct identity*. With an identity verifier, a wrong or spoofed `user_id` from the application or a tool argument is refused before it reaches the database.
+- **What it does not protect against:** a compromised application process. `memshield_app` can call `set_config` itself, so code holding the database credentials can claim any identity; code holding both the credentials and the token signing key can mint any identity. Keep identity binding inside this service and keep credentials and keys out of agent-reachable code paths.
+- **Trusted caller mode (no verifier) takes tenant, clearance and compartments from the service config.** ADK's `search_memory` receives only `app_name`/`user_id`, so in that mode run one service instance per tenant/clearance tier (or per Runner). With a verifier they come from the token and one instance serves everyone.
+- **`tenant_shared` content is trusted by design.** A user may publish a `tenant_shared` memory at or below their own clearance and within their compartments, and every agent entitled to read it will retrieve it. RLS enforces *who may read*, not whether the content is benign. The `pre_write` hook is the seam for a content check (it may only tighten or block).
+- **ANN indexes:** see [ANN indexes (HNSW) and RLS](#ann-indexes-hnsw-and-rls).
+- **Your own pool:** if you pass `pool=`, create it with `reset=adk_memshield.reset_connection`, or custom SQL that writes a session-scoped `app.*` setting could reach the next raw borrower of that connection (memshield itself always rebinds every key).
+- `sql/02_benchmark_baseline.sql` creates an intentionally unprotected table for tests and benchmarks. **Do not apply it in production.** memshield refuses to use it unless `allow_insecure_role=True`, which logs a warning on every use.
 
 ---
 
@@ -118,6 +163,8 @@ Retrieval latency (database transaction including `set_config`, 60 rows, ms):
 ```bash
 pip install adk-memshield
 ```
+
+Optional extras: `adk-memshield[jwt]` (OIDC / JWT identity tokens via PyJWT) and `adk-memshield[mcp]` (the MCP server).
 
 From source, for development:
 
@@ -161,25 +208,46 @@ memory_service = MemShieldMemoryService(
         dsn="postgresql://memshield_app:memshield_pass@localhost:54329/memshield",
         tenant_id="tenant_alpha",
         agent_clearance=2,
+        compartments=["finance"],
     )
 )
+memory_service.verify_rls_posture()  # optional: fail fast at startup
 
 runner = Runner(
     app_name="finance_copilot",
     agent=LlmAgent(
         name="assistant",
-        model="gemini-2.5-flash",
+        model="gemini-3.8-flash",
         tools=[preload_memory_tool, load_memory_tool],
     ),
     session_service=InMemorySessionService(),
     memory_service=memory_service,
 )
 # ADK's memory tools call memory_service.search_memory(app_name=..., user_id=...) with the
-# Runner's authenticated identity; persist a finished session with:
+# Runner's own identity; persist a finished session with:
 #   await memory_service.add_session_to_memory(session)
 ```
 
-### 3. Write and search memories directly
+### 3. Verified identity: one service for every tenant
+
+```python
+from adk_memshield import HmacIdentityVerifier, MemShieldMemoryService, bind_identity
+
+verifier = HmacIdentityVerifier({"2026-11": KEY_BYTES})  # keep old keys during rotation
+memory_service = MemShieldMemoryService(dsn=APP_DSN, identity_verifier=verifier)
+
+# In your auth layer, once per request (the token is minted by your login service):
+token = verifier.issue(kid="2026-11", user_id="alice", tenant_id="tenant_alpha",
+                       audience="finance_copilot", clearance=2, compartments=["finance"])
+
+with bind_identity(token):
+    async for event in runner.run_async(user_id="alice", session_id=sid, new_message=msg):
+        ...
+```
+
+With `JwtIdentityVerifier(jwks_url=...)` (`adk-memshield[jwt]`), the token can come from Firebase Auth, Google Cloud Identity Platform or any OIDC provider; tenant, clearance and compartments are read from the `tenant`, `clearance` and `compartments` claims (configurable). No token, an invalid or expired token, a token for another `app_name`, or an ADK `user_id` that differs from the token subject raises `MemShieldIdentityError`. Tokens are never logged.
+
+### 4. Write and search memories directly
 
 ```python
 from google.adk.memory.memory_entry import MemoryEntry
@@ -193,10 +261,10 @@ await memory_service.add_memory(
             content=types.Content(parts=[types.Part(text="Wire routing code is SWIFT-ALPHA-99.")]),
             custom_metadata={"scope": "private"},
         ),
-        # Visible to tenant agents with clearance >= 2 (the writer's clearance must be >= 2).
+        # Readable by tenant agents with clearance >= 2 that hold the finance compartment.
         MemoryEntry(
             content=types.Content(parts=[types.Part(text="Treasury approval threshold is $250k.")]),
-            custom_metadata={"scope": "tenant_shared", "min_clearance": 2},
+            custom_metadata={"scope": "tenant_shared", "min_clearance": 2, "compartments": ["finance"]},
         ),
     ],
 )
@@ -204,13 +272,12 @@ await memory_service.add_memory(
 response = await memory_service.search_memory(
     app_name="finance_copilot", user_id="alice", query="What is my wire routing code?"
 )
-for entry in response.memories:
-    print(entry.content.parts[0].text, entry.custom_metadata["similarity"])
-
-print(memory_service.last_query_telemetry.to_dict())  # SQL, identity context, latency, rows
+print(memory_service.last_query_telemetry.to_dict())  # SQL, bound context, latency, rows
 ```
 
-### 4. Run custom SQL under the caller's RLS identity
+Compartment names match `^[a-z0-9_-]{1,64}$`. A `tenant_shared` row with no compartments is readable by every entitled agent in the tenant; with compartments, by agents that hold at least one of them. Owners always read their own rows.
+
+### 5. Run custom SQL under the caller's RLS identity
 
 ```python
 with memory_service.rls_transaction(app_name="finance_copilot", user_id="alice") as cur:
@@ -218,7 +285,46 @@ with memory_service.rls_transaction(app_name="finance_copilot", user_id="alice")
     rows = cur.fetchall()  # only rows alice may read, even though the SQL has no WHERE clause
 ```
 
-### 5. `memshield://` URI for the ADK service registry
+### 6. Without ADK: the core store
+
+```python
+from adk_memshield import MemoryRecord, MemShieldConfig, MemShieldStore
+
+store = MemShieldStore(MemShieldConfig(dsn=APP_DSN, tenant_id="tenant_alpha"))
+store.add(app_name="notes", user_id="alice", records=[MemoryRecord(text="Parking bay 4")])
+hits = store.search(app_name="notes", user_id="alice", query="where do I park?")
+```
+
+### 7. MCP server
+
+```bash
+pip install "adk-memshield[mcp]"
+# stdio, one trusted local user:
+memshield-mcp --transport stdio --app notes --user alice --tenant tenant_alpha
+# streamable HTTP: needs a verifier; clients send Authorization: Bearer <identity token>
+MEMSHIELD_HMAC_KEYS='{"2026-11": "<32+ byte secret>"}' memshield-mcp --transport http --app notes
+```
+
+Tools: `remember`, `recall`, `forget`. The HTTP transport refuses to start without a verifier and refuses any request without a valid token. In code: `adk_memshield.adapters.mcp.create_mcp_server(store, app_name=...)`.
+
+### 8. `pre_write` hook
+
+```python
+from adk_memshield import Allow, Block, Downlabel
+
+def guard(identity, pending):
+    if "ignore previous instructions" in pending.text.lower():
+        return Block("prompt-injection pattern")
+    if "salary" in pending.text.lower() and pending.scope == "tenant_shared":
+        return Downlabel(scope="private")
+    return Allow()
+
+memory_service = MemShieldMemoryService(dsn=APP_DSN, tenant_id="t", pre_write=guard)
+```
+
+A hook may only tighten (`tenant_shared` to `private`, a higher `min_clearance`, a narrower compartment set) or block; a widening decision raises `ValueError`, and a hook that raises is treated as a block.
+
+### 9. `memshield://` URI for the ADK service registry
 
 ```python
 from adk_memshield import register_adk_uri
@@ -226,29 +332,49 @@ from google.adk.cli.service_registry import get_service_registry
 
 register_adk_uri("memshield")
 memory_service = get_service_registry().create_memory_service(
-    "memshield://memshield_app:memshield_pass@localhost:54329/memshield?tenant_id=tenant_alpha&agent_clearance=2"
+    "memshield://memshield_app:memshield_pass@localhost:54329/memshield"
+    "?tenant_id=tenant_alpha&agent_clearance=2&compartments=finance,legal"
 )
 ```
 
 ---
 
-## Reproducing tests & benchmarks
+## Upgrading from 0.1.x
 
-All containers use compose project `adk-memshield` and host port `54329`:
-
-```bash
-# 1. Start pgvector:pg16 (applies sql/01_schema.sql and sql/02_benchmark_baseline.sql on first start)
-docker compose -p adk-memshield up -d db
-
-# 2. Run the 8 integration tests, including a real ADK Runner + preload_memory/load_memory test
-docker compose -p adk-memshield run --rm test pytest -v
-
-# 3. Run the benchmark
-docker compose -p adk-memshield run --rm test python benchmarks/run_memleak_eval.py
-```
+1. Apply [`sql/migrations/0.1_to_0.2.sql`](https://github.com/aalishan001/adk-memshield/blob/main/sql/migrations/0.1_to_0.2.sql) as the table owner, in one transaction: `psql "$ADMIN_DSN" -v ON_ERROR_STOP=1 --single-transaction -f sql/migrations/0.1_to_0.2.sql`. It is idempotent. It adds `compartments` (existing rows get `{}` and keep exactly their 0.1.x visibility), a GIN index, and recreates the four policies.
+2. Upgrade the package. The ADK API is unchanged. New: the service now refuses an RLS-bypassing role or an unprotected table (`MemShieldConfigurationError`); benchmarks against an intentionally unprotected table need `allow_insecure_role=True`.
+3. If you pass your own `pool=`, add `reset=adk_memshield.reset_connection`.
 
 ---
 
+## Reproducing tests & benchmarks
+
+All containers use compose project `adk-memshield`; Postgres 16 is on host port `54329`, the optional Postgres 17 on `54331`.
+
+```bash
+docker compose -p adk-memshield up -d --wait db
+docker compose -p adk-memshield run --rm test pytest -v              # 104 tests
+docker compose -p adk-memshield run --rm test pytest -v -m slow      # 50k-row HNSW plan-cache test
+docker compose -p adk-memshield run --rm test python benchmarks/run_memleak_eval.py
+docker compose -p adk-memshield run --rm test python benchmarks/plan_cache_hnsw.py --rows 100000 --repeats 4
+docker compose -p adk-memshield run --rm test python benchmarks/pool_reset_cost.py
+# PostgreSQL 17:
+docker compose -p adk-memshield --profile pg17 up -d --wait db17
+docker compose -p adk-memshield run --rm \
+  -e MEMSHIELD_DB_DSN=postgresql://memshield_app:memshield_pass@db17:5432/memshield \
+  -e MEMSHIELD_ADMIN_DSN=postgresql://postgres:postgres_admin_pass@db17:5432/memshield \
+  test pytest -v
+```
+
+Raw outputs of every number in this README are under [`benchmarks/runs/`](https://github.com/aalishan001/adk-memshield/tree/main/benchmarks/runs).
+
+---
+
+## Credits
+
+- The prepared-statement + HNSW recall collapse was reported and measured by [Sunnatulla](https://dev.to/sunnatulla_dev/comment/3l7np), who also suggested pinning the plan in one helper rather than per query.
+- The pooled-connection hygiene tests were prompted by a reader question.
+
 ## License
 
-Apache License 2.0 — see [`LICENSE`](https://github.com/aalishan001/adk-memshield/blob/main/LICENSE).
+Apache License 2.0. See [`LICENSE`](https://github.com/aalishan001/adk-memshield/blob/main/LICENSE).
