@@ -31,7 +31,8 @@ def _service(pool: ConnectionPool) -> MemShieldMemoryService:
 
 
 def test_plan_cache_mode_is_bound_per_transaction(make_pool: Callable[..., ConnectionPool]) -> None:
-    pool = make_pool()
+    # No reset callback: a session-scoped binding would survive and fail this test.
+    pool = make_pool(reset=False)
     svc = _service(pool)
     with svc.rls_transaction(app_name=APP, user_id="alice") as cur:
         cur.execute("SELECT current_setting('plan_cache_mode'), pg_backend_pid()")
@@ -46,19 +47,38 @@ def test_plan_cache_mode_is_bound_per_transaction(make_pool: Callable[..., Conne
     assert mode_after == "auto"
 
 
-def test_plan_cache_mode_holds_for_prepared_statements(make_pool: Callable[..., ConnectionPool]) -> None:
-    """Custom SQL repeated on one connection is prepared by psycopg; the pin still applies."""
-    pool = make_pool()
+_PARAM_SQL = "SELECT count(*) FROM memories WHERE user_id = %s AND min_clearance <= %s"
+
+
+def _plan_counts(pool: ConnectionPool, mode: str | None) -> tuple[int, int]:
+    """Run a parameterised statement 12 times on one connection; return the prepared
+    statement's (generic_plans, custom_plans) from pg_prepared_statements."""
     svc = _service(pool)
-    modes = []
+    if mode is not None:
+        svc.store.plan_cache_mode = mode
     for _ in range(12):
         with svc.rls_transaction(app_name=APP, user_id="alice") as cur:
-            cur.execute("SELECT current_setting('plan_cache_mode')")
-            modes.append(cur.fetchone()[0])
-    assert modes == ["force_custom_plan"] * 12
+            cur.execute(_PARAM_SQL, ("alice", 3))
     with pool.connection() as conn:
-        prepared = conn.execute("SELECT count(*) FROM pg_prepared_statements").fetchone()[0]
-    assert prepared > 0, "psycopg did not prepare the repeated statements"
+        row = conn.execute(
+            "SELECT generic_plans, custom_plans FROM pg_prepared_statements"
+            " WHERE statement LIKE 'SELECT count(*) FROM memories WHERE user_id = $1%'"
+        ).fetchone()
+    assert row is not None, "psycopg did not prepare the repeated statement"
+    return int(row[0]), int(row[1])
+
+
+def test_prepared_statements_never_use_a_generic_plan(make_pool: Callable[..., ConnectionPool]) -> None:
+    """psycopg prepares the statement after 5 runs; every later execution is custom-planned."""
+    generic, custom = _plan_counts(make_pool(), None)
+    assert generic == 0
+    assert custom >= 6
+
+
+def test_prepared_statements_negative_control(make_pool: Callable[..., ConnectionPool]) -> None:
+    """With the 0.1.x binding (auto) PostgreSQL switches to a generic plan: the test can fail."""
+    generic, _ = _plan_counts(make_pool(), "auto")
+    assert generic > 0
 
 
 def test_override_reproduces_0_1_behaviour(make_pool: Callable[..., ConnectionPool]) -> None:
