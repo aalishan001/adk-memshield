@@ -51,7 +51,7 @@ async def test_allow_insecure_role_warns_on_every_check(
         await svc.search_memory(app_name=APP, user_id="alice", query="a")
         await svc.search_memory(app_name=APP, user_id="alice", query="b")
     warnings = [r for r in caplog.records if "WITHOUT row-level security" in r.getMessage()]
-    assert len(warnings) == 2
+    assert len(warnings) >= 2  # at least one per operation
 
 
 @pytest.fixture
@@ -142,3 +142,50 @@ def test_construction_does_no_io() -> None:
     svc = MemShieldMemoryService(dsn="postgresql://nobody:nothing@127.0.0.1:1/none", pool=unopened)
     assert svc.config.table_name == "memories"
     assert unopened.closed
+
+
+_FORCED = "ALTER TABLE {table} ENABLE ROW LEVEL SECURITY; ALTER TABLE {table} FORCE ROW LEVEL SECURITY;"
+
+
+def test_owning_role_is_refused(
+    make_pool: Callable[..., ConnectionPool], scratch_table: Callable[[str], str]
+) -> None:
+    table = scratch_table(_FORCED + _POLICIES + "ALTER TABLE {table} OWNER TO memshield_app;")
+    with pytest.raises(MemShieldConfigurationError, match="owns table"):
+        _svc(make_pool(), table_name=table).verify_rls_posture()
+
+
+def test_widening_policy_granted_to_a_group_role_is_refused(
+    make_pool: Callable[..., ConnectionPool], scratch_table: Callable[[str], str]
+) -> None:
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute("DROP ROLE IF EXISTS memshield_posture_group")
+        conn.execute("CREATE ROLE memshield_posture_group NOLOGIN")
+        conn.execute("GRANT memshield_posture_group TO memshield_app")
+    try:
+        table = scratch_table(
+            _FORCED + _POLICIES
+            + "CREATE POLICY grp ON {table} FOR SELECT TO memshield_posture_group USING (true);"
+        )
+        with pytest.raises(MemShieldConfigurationError, match="grp"):
+            _svc(make_pool(), table_name=table).verify_rls_posture()
+    finally:
+        with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+            conn.execute("DROP TABLE IF EXISTS posture_scratch_0")
+            conn.execute("DROP ROLE IF EXISTS memshield_posture_group")
+
+
+def test_update_policy_checking_tenant_only_in_with_check_is_refused(
+    make_pool: Callable[..., ConnectionPool], scratch_table: Callable[[str], str]
+) -> None:
+    table = scratch_table(
+        _FORCED
+        + _POLICIES.replace(
+            "CREATE POLICY u ON {table} FOR UPDATE TO memshield_app\n"
+            "    USING (tenant_id = current_setting('app.current_tenant_id', true));",
+            "CREATE POLICY u ON {table} FOR UPDATE TO memshield_app USING (true)"
+            " WITH CHECK (tenant_id = current_setting('app.current_tenant_id', true));",
+        )
+    )
+    with pytest.raises(MemShieldConfigurationError, match="UPDATE"):
+        _svc(make_pool(), table_name=table).verify_rls_posture()

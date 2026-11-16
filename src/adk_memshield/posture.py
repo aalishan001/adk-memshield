@@ -13,6 +13,7 @@ from .errors import MemShieldConfigurationError
 logger = logging.getLogger("adk_memshield")
 
 _REQUIRED_COMMANDS = ("SELECT", "INSERT", "UPDATE", "DELETE")
+_TENANT_SETTING = "app.current_tenant_id"
 
 
 @dataclass(frozen=True)
@@ -49,8 +50,9 @@ def inspect_rls_posture(cur: psycopg.Cursor[Any], table: str) -> PostureReport:
     role, rolsuper, rolbypassrls = role_row
 
     cur.execute(
-        "SELECT c.relrowsecurity, c.relforcerowsecurity FROM pg_class c"
-        " WHERE c.oid = to_regclass(%s)",
+        "SELECT c.relrowsecurity, c.relforcerowsecurity,"
+        " pg_has_role(current_user, c.relowner, 'MEMBER')"
+        " FROM pg_class c WHERE c.oid = to_regclass(%s)",
         (table,),
     )
     rel_row = cur.fetchone()
@@ -73,29 +75,44 @@ def inspect_rls_posture(cur: psycopg.Cursor[Any], table: str) -> PostureReport:
             problems.append(
                 f"table {table!r} does not FORCE row-level security (the table owner would bypass it)"
             )
+        if rel_row[2]:
+            problems.append(
+                f"role {role!r} owns table {table!r} (or is a member of its owner role) and could "
+                "disable row-level security or drop its policies at runtime"
+            )
+        # A policy applies to the role if it is granted to PUBLIC or to any role the
+        # connecting role is a member of (directly or through inheritance).
         cur.execute(
             "SELECT p.polname,"
             " CASE p.polcmd WHEN 'r' THEN 'SELECT' WHEN 'a' THEN 'INSERT' WHEN 'w' THEN 'UPDATE'"
             "   WHEN 'd' THEN 'DELETE' ELSE 'ALL' END,"
-            " CASE WHEN p.polpermissive THEN 'PERMISSIVE' ELSE 'RESTRICTIVE' END,"
-            " ARRAY(SELECT CASE WHEN r = 0 THEN 'public' ELSE pg_get_userbyid(r)::text END"
-            "       FROM unnest(p.polroles) AS r),"
-            " coalesce(pg_get_expr(p.polqual, p.polrelid), '') || ' '"
-            "   || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '')"
+            " p.polpermissive,"
+            " EXISTS (SELECT 1 FROM unnest(p.polroles) AS r"
+            "         WHERE r = 0 OR pg_has_role(current_user, r, 'MEMBER')),"
+            " coalesce(pg_get_expr(p.polqual, p.polrelid), ''),"
+            " coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '')"
             " FROM pg_policy p WHERE p.polrelid = to_regclass(%s)",
             (table,),
         )
         covered: set[str] = set()
-        for name, cmd, permissive, roles, expr in cur.fetchall():
-            applies = "public" in roles or role in roles
+        for name, cmd, permissive, applies, qual, check in cur.fetchall():
             if not applies:
                 continue
             policies.setdefault(cmd, []).append(name)
-            if permissive == "PERMISSIVE" and "app.current_tenant_id" not in expr:
-                problems.append(
-                    f"policy {name!r} on {table!r} is permissive but does not check "
-                    "app.current_tenant_id, so it can widen access"
-                )
+            if permissive:
+                # Each expression that decides visibility or writes must check the tenant.
+                needed = {
+                    "SELECT": [qual],
+                    "DELETE": [qual],
+                    "INSERT": [check],
+                    "UPDATE": [qual, check or qual],
+                    "ALL": [qual, check or qual],
+                }[cmd]
+                if any(_TENANT_SETTING not in expr for expr in needed):
+                    problems.append(
+                        f"policy {name!r} on {table!r} is permissive and an expression for "
+                        f"{cmd} does not reference {_TENANT_SETTING}, so it can widen access"
+                    )
             if cmd == "ALL":
                 covered.update(_REQUIRED_COMMANDS)
             else:
