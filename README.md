@@ -12,6 +12,7 @@
 
 ## What changed in 0.2.0
 
+- **0.2.1 (docs):** if you add an HNSW index, enable pgvector's iterative scan as a connection option; a filtered HNSW search can otherwise return nothing for callers who see little of a large table. See [ANN indexes and RLS](#ann-indexes-hnsw-and-rls).
 - **Recall no longer collapses when a prepared statement switches to a generic plan** (prepared statements + an HNSW index). Every RLS transaction pins `plan_cache_mode = force_custom_plan`. Reported and measured by [Sunnatulla](https://dev.to/sunnatulla_dev/comment/3l7np); see [ANN indexes and RLS](#ann-indexes-hnsw-and-rls).
 - **Pooled connections are tested** after rollbacks, statement timeouts, killed backends, session-scoped `set_config`, `SET ROLE` and temporary tables, and memshield's pools reset session settings, role and temp tables on check-in. The table is always used under its schema-qualified name.
 - **Refuses to run unprotected.** On first use memshield checks that the role is not a superuser, has no `BYPASSRLS` and does not own the table, that the table has forced RLS, and that every command has a policy whose expressions check the tenant.
@@ -137,12 +138,37 @@ The schema ships without a vector index. If you add one (HNSW or IVFFlat), read 
 
 Raw output, plans and per-search row counts: [`plan-cache-hnsw-pg16-100k.txt`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/runs/2026-11-16/plan-cache-hnsw-pg16-100k.txt) (PostgreSQL 16.15) and [`plan-cache-hnsw-pg17-100k.txt`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/runs/2026-11-16/plan-cache-hnsw-pg17-100k.txt) (PostgreSQL 17.12), both pgvector 0.8.7. On one connection the light user's 0.1.x RLS-only searches return 10 rows for searches 1 to 10 and 0 rows from the 11th on.
 
+**A second empty-results case: HNSW post-filtering under a custom plan.** Found while testing 0.2.0 with [adk-leak-arena](https://github.com/aalishan001/adk-leak-arena)'s prepared-connection mode (`leak-arena prepared`): 100,000 rows per table, a light caller who can read about 1.5% of them, a query whose nearest neighbours belong to other users, top 10, 20 executions on one pinned connection, recall against the exact answer. With an HNSW index the planner chose the index scan **under a custom plan, from the first execution**; the scan returned its 40 candidates (`hnsw.ef_search`) and the filter removed all 40. Plan pinning cannot help here. It happened with the RLS policy as the only filter and equally with an application `WHERE` clause on a table without RLS, so it is a property of filtered HNSW search, not of RLS. pgvector's iterative index scan fixed it:
+
+| Table / query shape | Index | `hnsw.iterative_scan` | Empty results | Recall@10 | Plan (rows removed by filter) | p50 |
+| :--- | :--- | :--- | ---: | ---: | :--- | ---: |
+| memshield, RLS only | none | off | 0 of 20 | 1.00 | Bitmap Heap Scan (16,193) | 63.2 ms |
+| memshield, RLS only | HNSW | off | **20 of 20** | **0.00** | HNSW Index Scan (40) | 1.7 ms |
+| memshield, RLS only | HNSW | `relaxed_order` | 0 of 20 | 1.00 | HNSW Index Scan (412) | 5.3 ms |
+| memshield, default search | HNSW | off | 0 of 20 | 1.00 | Bitmap Heap Scan (16,193) | 63.2 ms |
+| plain pgvector table, app `WHERE` only | HNSW | off | **20 of 20** | **0.00** | HNSW Index Scan (40) | 1.4 ms |
+| plain pgvector table, app `WHERE` only | HNSW | `relaxed_order` | 0 of 20 | 1.00 | HNSW Index Scan (427) | 5.6 ms |
+
+PostgreSQL 16.15, pgvector 0.8.7, adk-memshield 0.2.0 from PyPI. Raw outputs: [`prepared-100k-exact`, `prepared-100k-hnsw` and `prepared-100k-hnsw-iterative`](https://github.com/aalishan001/adk-leak-arena/tree/main/benchmarks/runs/2026-11-16) (`.json`, `.log`, and the command in `.cmd`). memshield's default search got an exact bitmap plan here; that is the planner's choice for this data, not a guarantee.
+
+**Recommendation: whenever you add an HNSW index, turn on pgvector's iterative scan** (pgvector 0.8+) for the role memshield connects as, so a filtered scan keeps fetching candidates until `LIMIT` rows pass the filter (or `hnsw.max_scan_tuples` is reached). Set it where the pool's `RESET ALL` on check-in keeps it: as a **connection startup option** in the DSN, or as a role default.
+
+```text
+postgresql://memshield_app:...@host:5432/db?options=-c%20hnsw.iterative_scan%3Drelaxed_order
+```
+
+```sql
+ALTER ROLE memshield_app IN DATABASE mydb SET hnsw.iterative_scan = 'relaxed_order';
+```
+
+A plain `SET` in your own code does not survive check-in (`tests/test_pool_hygiene.py::test_startup_options_survive_the_checkin_reset` covers both). `relaxed_order` can return rows slightly out of exact distance order; use `strict_order` if you need exact order, or sort the hits by `similarity`. 0.2.1 does not set this for you: it changes query results and ordering on every connection of the pool, needs pgvector 0.8, and is better chosen per deployment. Measure recall at your own scale either way.
+
 **Remaining guidance.**
 
-- The pin stops the switch to a generic plan; it does not stop HNSW post-filtering. A custom plan can still be an HNSW scan with the policy applied afterwards: on PostgreSQL 17 the heavy user still got 9 rows instead of 10 on 8 of 20 searches with the pin, and callers with mid-range visibility (not measured here) can get fewer than `top_k` rows. For the light user the pin restores recall because the planner chooses an exact scan, whose cost grows with the table (RLS-only light p50 42.4 ms pinned vs 21.0 ms unpinned on pg16).
+- The pin stops the switch to a generic plan; it does not stop HNSW post-filtering (see the second case above). A custom plan can still be an HNSW scan with the policy applied afterwards: on PostgreSQL 17 the heavy user still got 9 rows instead of 10 on 8 of 20 searches with the pin, and callers with mid-range visibility (not measured here) can get fewer than `top_k` rows. For the light user the pin restores recall because the planner chooses an exact scan, whose cost grows with the table (RLS-only light p50 42.4 ms pinned vs 21.0 ms unpinned on pg16).
 
 - memshield's own search was **not** affected in this measurement: its application filter (`user_id = $3 ...`) keeps the generic plan off the HNSW index. Custom SQL under `rls_transaction()` and the `simulate_missing_app_filter` path were affected. 0.2.0 pins the plan for all of them.
-- The heavy user's recall below 1.0 is HNSW's approximation plus the RLS/application filter applied after the index returns `hnsw.ef_search` candidates. For callers who can see most of a large table, enable pgvector iterative scans for the app role, e.g. `ALTER ROLE memshield_app IN DATABASE mydb SET hnsw.iterative_scan = 'relaxed_order';` (a role default survives the pool's `RESET ALL`), and tune `hnsw.ef_search`.
+- The heavy user's recall below 1.0 is HNSW's approximation plus the RLS/application filter applied after the index returns `hnsw.ef_search` candidates. Iterative scans (above) and a larger `hnsw.ef_search` help here too; in the plan-cache benchmark `relaxed_order` kept the heavy user at 0.84.
 - For very large tenants, consider list-partitioning `memories` by tenant so each tenant's index holds only its own rows.
 - Benchmark recall at your own scale before relying on an ANN index.
 
@@ -362,7 +388,7 @@ All containers use compose project `adk-memshield`; Postgres 16 is on host port 
 
 ```bash
 docker compose -p adk-memshield up -d --wait db
-docker compose -p adk-memshield run --rm test pytest -v              # 121 tests
+docker compose -p adk-memshield run --rm test pytest -v              # 122 tests
 docker compose -p adk-memshield run --rm test pytest -v -m slow      # 50k-row HNSW plan-cache test
 docker compose -p adk-memshield run --rm test python benchmarks/run_memleak_eval.py
 docker compose -p adk-memshield run --rm test python benchmarks/plan_cache_hnsw.py --rows 100000 --repeats 4
