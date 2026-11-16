@@ -10,15 +10,24 @@ permissions:
 
 jobs:
   test:
+    name: py${{ matrix.python-version }} / ${{ matrix.postgres }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        include:
+          - python-version: "3.11"
+            postgres: pg16
+          - python-version: "3.12"
+            postgres: pg16
+            slow: true
+          - python-version: "3.12"
+            postgres: pg17
+            slow: true
 
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        image: pgvector/pgvector:${{ matrix.postgres }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres_admin_pass
@@ -60,6 +69,10 @@ jobs:
 
       - name: Test suite
         run: pytest -v
+
+      - name: Slow tests (50,000-row HNSW plan-cache test with negative control)
+        if: matrix.slow
+        run: pytest -v -m slow
 
       - name: Benchmark
         run: python benchmarks/run_memleak_eval.py

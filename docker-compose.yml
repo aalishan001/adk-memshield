@@ -19,11 +19,30 @@ services:
       timeout: 5s
       retries: 15
 
+  # PostgreSQL 17 for the cross-version test run (`--profile pg17`). Ephemeral: no volume.
+  db17:
+    profiles: ["pg17"]
+    image: pgvector/pgvector:pg17
+    container_name: adk_memshield_db17
+    ports:
+      - "54331:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_admin_pass
+      POSTGRES_DB: memshield
+    volumes:
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d memshield"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
   test:
     build:
       context: .
       dockerfile: Dockerfile
-    image: adk-memshield-runner:0.1.0
+    image: adk-memshield-runner:0.2.0
     container_name: adk_memshield_test
     depends_on:
       db:
