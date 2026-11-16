@@ -1,0 +1,6 @@
+# adk-memshield 0.2.1 installed from PyPI in a clean python:3.12-slim container
+# pip install --index-url https://pypi.org/simple 'adk-memshield[jwt,mcp]==0.2.1' pytest pytest-asyncio; pytest (repo tests, no src on the path)
+# PyPI sha256: wheel 7a0ff9dd3591cda20bf88788fa9bc4f70d5673b45303a4a77420fab5a63fc35c sdist eb2dbf7547c643e1eddc9270f019f744de7413225ac62dbd9047143e42671978 (match GitHub Release assets)
+
+/usr/local/lib/python3.12/site-packages/adk_memshield/__init__.py 0.2.1
+122 passed, 1 skipped in 18.93s
