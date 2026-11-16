@@ -1,0 +1,140 @@
+"""Refuse to run on a connection that cannot enforce Row-Level Security."""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from typing import Any
+
+import psycopg
+
+from .errors import MemShieldConfigurationError
+
+logger = logging.getLogger("adk_memshield")
+
+_REQUIRED_COMMANDS = ("SELECT", "INSERT", "UPDATE", "DELETE")
+
+
+@dataclass(frozen=True)
+class PostureReport:
+    """What the posture check found for one role and table."""
+
+    role: str
+    table: str
+    rolsuper: bool
+    rolbypassrls: bool
+    row_security: bool
+    force_row_security: bool
+    policies: dict[str, list[str]] = field(default_factory=dict)
+    problems: list[str] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return not self.problems
+
+
+def inspect_rls_posture(cur: psycopg.Cursor[Any], table: str) -> PostureReport:
+    """Read the posture of ``current_user`` and ``table`` from the catalogs.
+
+    ``table`` must already be a validated identifier; it is passed as a bound parameter to
+    ``to_regclass`` and never interpolated.
+    """
+    cur.execute(
+        "SELECT current_user, r.rolsuper, r.rolbypassrls"
+        " FROM pg_roles r WHERE r.rolname = current_user"
+    )
+    role_row = cur.fetchone()
+    if role_row is None:  # pragma: no cover - current_user always has a pg_roles row
+        raise MemShieldConfigurationError("could not read the current role from pg_roles")
+    role, rolsuper, rolbypassrls = role_row
+
+    cur.execute(
+        "SELECT c.relrowsecurity, c.relforcerowsecurity FROM pg_class c"
+        " WHERE c.oid = to_regclass(%s)",
+        (table,),
+    )
+    rel_row = cur.fetchone()
+
+    policies: dict[str, list[str]] = {}
+    problems: list[str] = []
+    if rolsuper:
+        problems.append(f"role {role!r} is a superuser, which bypasses row-level security")
+    if rolbypassrls:
+        problems.append(f"role {role!r} has BYPASSRLS, which bypasses row-level security")
+
+    if rel_row is None:
+        problems.append(f"table {table!r} does not exist or is not visible on the search_path")
+        row_security = force_row_security = False
+    else:
+        row_security, force_row_security = bool(rel_row[0]), bool(rel_row[1])
+        if not row_security:
+            problems.append(f"table {table!r} does not have row-level security enabled")
+        if not force_row_security:
+            problems.append(
+                f"table {table!r} does not FORCE row-level security (the table owner would bypass it)"
+            )
+        cur.execute(
+            "SELECT p.polname,"
+            " CASE p.polcmd WHEN 'r' THEN 'SELECT' WHEN 'a' THEN 'INSERT' WHEN 'w' THEN 'UPDATE'"
+            "   WHEN 'd' THEN 'DELETE' ELSE 'ALL' END,"
+            " CASE WHEN p.polpermissive THEN 'PERMISSIVE' ELSE 'RESTRICTIVE' END,"
+            " ARRAY(SELECT CASE WHEN r = 0 THEN 'public' ELSE pg_get_userbyid(r)::text END"
+            "       FROM unnest(p.polroles) AS r),"
+            " coalesce(pg_get_expr(p.polqual, p.polrelid), '') || ' '"
+            "   || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '')"
+            " FROM pg_policy p WHERE p.polrelid = to_regclass(%s)",
+            (table,),
+        )
+        covered: set[str] = set()
+        for name, cmd, permissive, roles, expr in cur.fetchall():
+            applies = "public" in roles or role in roles
+            if not applies:
+                continue
+            policies.setdefault(cmd, []).append(name)
+            if permissive == "PERMISSIVE" and "app.current_tenant_id" not in expr:
+                problems.append(
+                    f"policy {name!r} on {table!r} is permissive but does not check "
+                    "app.current_tenant_id, so it can widen access"
+                )
+            if cmd == "ALL":
+                covered.update(_REQUIRED_COMMANDS)
+            else:
+                covered.add(cmd)
+        missing = [c for c in _REQUIRED_COMMANDS if c not in covered]
+        if missing:
+            problems.append(
+                f"table {table!r} has no row-level security policy for {', '.join(missing)}"
+                f" that applies to role {role!r}"
+            )
+
+    return PostureReport(
+        role=role,
+        table=table,
+        rolsuper=bool(rolsuper),
+        rolbypassrls=bool(rolbypassrls),
+        row_security=row_security,
+        force_row_security=force_row_security,
+        policies=policies,
+        problems=problems,
+    )
+
+
+def enforce_rls_posture(
+    cur: psycopg.Cursor[Any], table: str, *, allow_insecure_role: bool = False
+) -> PostureReport:
+    """Inspect posture and raise :class:`MemShieldConfigurationError` on any problem.
+
+    With ``allow_insecure_role=True`` (benchmarks and tests against an intentionally
+    unprotected table only) problems are logged as a warning instead of raising.
+    """
+    report = inspect_rls_posture(cur, table)
+    if report.ok:
+        return report
+    summary = "; ".join(report.problems)
+    if allow_insecure_role:
+        logger.warning("adk-memshield running WITHOUT row-level security protection: %s", summary)
+        return report
+    raise MemShieldConfigurationError(
+        f"refusing to run: {summary}. Connect as a NOSUPERUSER NOBYPASSRLS role "
+        "(see sql/01_schema.sql) on a table with FORCE ROW LEVEL SECURITY."
+    )
