@@ -1,0 +1,20 @@
+$ docker compose -p adk-memshield run --rm -e MEMSHIELD_DB_DSN=...@db17... -e MEMSHIELD_ADMIN_DSN=...@db17... test python benchmarks/tiny_tenant_hnsw.py --rows 200000   # PostgreSQL 17
+# One-row tenants + HNSW: hnsw.iterative_scan vs idx_memories_scope_lookup
+postgres 17.12 (Debian 17.12-1.pgdg12+1), pgvector 0.8.7, 200000 rows, 20 one-row tenants, top_k 10, load 142.9 s, HNSW build 71.4 s
+
+| Case | Query shape | `idx_memories_scope_lookup` | `hnsw.iterative_scan` | `hnsw.max_scan_tuples` | One-row tenants found | Recall | Plan | p50 / p95 ms |
+| :--- | :--- | :--- | :--- | ---: | ---: | ---: | :--- | ---: |
+| planner's choice | RLS only | dropped | off | 20000 | 20 / 20 | 1.00 | Seq Scan | 57.9 / 62.29 |
+| planner's choice | default search | dropped | off | 20000 | 20 / 20 | 1.00 | Seq Scan | 43.76 / 47.64 |
+| planner's choice | RLS only | dropped | relaxed_order | 20000 | 20 / 20 | 1.00 | Seq Scan | 55.95 / 68.12 |
+| planner's choice | default search | dropped | relaxed_order | 20000 | 20 / 20 | 1.00 | Seq Scan | 40.41 / 45.75 |
+| planner's choice | RLS only | present | off | 20000 | 20 / 20 | 1.00 | Index Scan using idx_memories_scope_lookup | 1.34 / 1.87 |
+| planner's choice | default search | present | off | 20000 | 20 / 20 | 1.00 | Index Scan using idx_memories_scope_lookup | 1.72 / 2.16 |
+| planner's choice | RLS only | present | relaxed_order | 20000 | 20 / 20 | 1.00 | Index Scan using idx_memories_scope_lookup | 1.42 / 2.18 |
+| planner's choice | default search | present | relaxed_order | 20000 | 20 / 20 | 1.00 | Index Scan using idx_memories_scope_lookup | 1.4 / 1.82 |
+| HNSW forced (enable_seqscan off) | RLS only | dropped | off | 20000 | 0 / 20 | 0.00 | Index Scan using idx_memories_embedding_hnsw | 8.93 / 9.74 |
+| HNSW forced (enable_seqscan off) | default search | dropped | off | 20000 | 0 / 20 | 0.00 | Index Scan using idx_memories_embedding_hnsw | 10.32 / 13.41 |
+| HNSW forced (enable_seqscan off) | RLS only | dropped | relaxed_order | 20000 | 0 / 20 | 0.00 | Index Scan using idx_memories_embedding_hnsw | 60.55 / 107.15 |
+| HNSW forced (enable_seqscan off) | default search | dropped | relaxed_order | 20000 | 0 / 20 | 0.00 | Index Scan using idx_memories_embedding_hnsw | 69.69 / 119.79 |
+| HNSW forced (enable_seqscan off) | RLS only | dropped | relaxed_order | 250000 | 0 / 20 | 0.00 | Index Scan using idx_memories_embedding_hnsw | 102.84 / 150.86 |
+| HNSW forced (enable_seqscan off) | default search | dropped | relaxed_order | 250000 | 0 / 20 | 0.00 | Index Scan using idx_memories_embedding_hnsw | 91.51 / 121.63 |
