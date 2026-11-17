@@ -426,6 +426,7 @@ Raw outputs of every number in this README are under [`benchmarks/runs/`](https:
 ## Credits
 
 - The prepared-statement + HNSW recall collapse was reported and measured by [Sunnatulla](https://dev.to/sunnatulla_dev/comment/3l7np), who also suggested pinning the plan in one helper rather than per query.
+- The iterative-scan limit for tenants that own almost nothing (0.2.2) was also found and measured by [Sunnatulla](https://dev.to/sunnatulla_dev): `relaxed_order` alone left about half of the one-row tenants empty at 200k rows, and a B-tree on the user key fixed it.
 - The pooled-connection hygiene tests were prompted by a reader question.
 
 ## License
