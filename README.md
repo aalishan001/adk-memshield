@@ -12,6 +12,7 @@
 
 ## What changed in 0.2.0
 
+- **0.2.2 (docs):** an iterative scan stops at `hnsw.max_scan_tuples` and its memory limit, so tenants that own almost nothing can stay empty; the fix is the B-tree memshield's schema already ships (`idx_memories_scope_lookup`). Found by [Sunnatulla](https://dev.to/sunnatulla_dev); see [ANN indexes and RLS](#ann-indexes-hnsw-and-rls).
 - **0.2.1 (docs):** if you add an HNSW index, enable pgvector's iterative scan as a connection option; a filtered HNSW search can otherwise return nothing for callers who see little of a large table. See [ANN indexes and RLS](#ann-indexes-hnsw-and-rls).
 - **Recall no longer collapses when a prepared statement switches to a generic plan** (prepared statements + an HNSW index). Every RLS transaction pins `plan_cache_mode = force_custom_plan`. Reported and measured by [Sunnatulla](https://dev.to/sunnatulla_dev/comment/3l7np); see [ANN indexes and RLS](#ann-indexes-hnsw-and-rls).
 - **Pooled connections are tested** after rollbacks, statement timeouts, killed backends, session-scoped `set_config`, `SET ROLE` and temporary tables, and memshield's pools reset session settings, role and temp tables on check-in. The table is always used under its schema-qualified name.
@@ -162,6 +163,22 @@ ALTER ROLE memshield_app IN DATABASE mydb SET hnsw.iterative_scan = 'relaxed_ord
 ```
 
 A plain `SET` in your own code does not survive check-in (`tests/test_pool_hygiene.py::test_startup_options_survive_the_checkin_reset` covers both). `relaxed_order` can return rows slightly out of exact distance order; use `strict_order` if you need exact order, or sort the hits by `similarity`. 0.2.1 does not set this for you: it changes query results and ordering on every connection of the pool, needs pgvector 0.8, and is better chosen per deployment. Measure recall at your own scale either way.
+
+**Iterative scans have a budget: tenants that own almost nothing.** An iterative scan stops after `hnsw.max_scan_tuples` tuples (20,000 by default) and when it reaches its memory limit (`hnsw.scan_mem_multiplier` × `work_mem`), even if fewer than `LIMIT` rows have passed the filter. A tenant that owns one row in a large table can therefore still come back empty. [Sunnatulla](https://dev.to/sunnatulla_dev) found that `relaxed_order` alone left about half of the one-row tenants empty on a 200k-row table, and that a B-tree on the user key took recall to 1.00, because with it the planner skips HNSW for tiny users.
+
+The fix is that B-tree, and **memshield's schema already ships it**: `idx_memories_scope_lookup ON memories (app_name, tenant_id, user_id)`. Keep it whenever you add an HNSW index. For an application-filtered table (no RLS), create the same B-tree on the columns your filter uses, for example `CREATE INDEX ON my_memories (app_name, tenant_id, user_id);`.
+
+Measured with [`benchmarks/tiny_tenant_hnsw.py`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/tiny_tenant_hnsw.py): 200,000 rows, 20 tenants that own one row each, HNSW, top 10, each tenant searched once per configuration, recall against its one row. PostgreSQL 16.15 and 17.12 gave the same found/missed counts.
+
+| Configuration | Query shape | One-row tenants found (pg16 / pg17) | Plan | p50 pg16 / pg17 |
+| :--- | :--- | ---: | :--- | ---: |
+| shipped schema (`idx_memories_scope_lookup` present), iterative scan off or `relaxed_order` | RLS only and default search | **20 / 20** | Index Scan using `idx_memories_scope_lookup` | 1.3–1.6 / 1.3–1.7 ms |
+| B-tree dropped, planner's choice | RLS only and default search | 20 / 20 | Seq Scan | 48–75 / 40–58 ms |
+| B-tree dropped, HNSW forced (`enable_seqscan = off`), iterative scan off | RLS only and default search | **0 / 20** | HNSW Index Scan | 9–11 ms |
+| same, `relaxed_order`, `hnsw.max_scan_tuples` 20,000 | RLS only and default search | **0 / 20** | HNSW Index Scan | 60–70 ms |
+| same, `relaxed_order`, `hnsw.max_scan_tuples` 250,000 | RLS only and default search | **0 / 20** | HNSW Index Scan | 92–105 ms |
+
+Raw output: [`tiny-tenant-hnsw-pg16-200k.txt`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/runs/2026-11-17/tiny-tenant-hnsw-pg16-200k.txt) and [`tiny-tenant-hnsw-pg17-200k.txt`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/runs/2026-11-17/tiny-tenant-hnsw-pg17-200k.txt), pgvector 0.8.7. On this data the planner never chose HNSW for a one-row tenant on its own. Without the B-tree it fell back to a sequential scan, which is exact but 25–57 times slower than the B-tree here, and a different data distribution can make it choose HNSW instead, as in the report above. The forced rows show what happens on that path. Even with the tuple cap raised above the table size, the iterative scan found none of the one-row tenants, so raising `hnsw.max_scan_tuples` is not a fix on its own. Nothing leaked in any configuration.
 
 **Remaining guidance.**
 
@@ -392,6 +409,7 @@ docker compose -p adk-memshield run --rm test pytest -v              # 122 tests
 docker compose -p adk-memshield run --rm test pytest -v -m slow      # 50k-row HNSW plan-cache test
 docker compose -p adk-memshield run --rm test python benchmarks/run_memleak_eval.py
 docker compose -p adk-memshield run --rm test python benchmarks/plan_cache_hnsw.py --rows 100000 --repeats 4
+docker compose -p adk-memshield run --rm test python benchmarks/tiny_tenant_hnsw.py --rows 200000
 docker compose -p adk-memshield run --rm test python benchmarks/pool_reset_cost.py
 # PostgreSQL 17:
 docker compose -p adk-memshield --profile pg17 up -d --wait db17
