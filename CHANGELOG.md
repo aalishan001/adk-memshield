@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-17
+
+### Documentation
+- **Iterative scans have a budget; tiny tenants need the scope B-tree.** pgvector's iterative index scan stops after `hnsw.max_scan_tuples` (20,000 by default) and at its memory limit (`hnsw.scan_mem_multiplier` × `work_mem`), so a tenant that owns one row in a large table can stay empty even with `hnsw.iterative_scan = relaxed_order`. The README's "ANN indexes (HNSW) and RLS" section now says so, points out that memshield's schema already ships the fix (`idx_memories_scope_lookup` on `app_name, tenant_id, user_id`, which lets the planner skip HNSW for tiny tenants), and recommends the same B-tree for application-filtered tables. Measured with the new `benchmarks/tiny_tenant_hnsw.py` at 200,000 rows on PostgreSQL 16.15 and 17.12: with the shipped B-tree 20 of 20 one-row tenants found (index scan, about 1.5 ms); with HNSW forced and no B-tree, 0 of 20 with the iterative scan at the default cap and still 0 with the cap raised above the table size. Reported and measured by Sunnatulla (https://dev.to/sunnatulla_dev).
+
+### Added
+- `benchmarks/tiny_tenant_hnsw.py` and its raw outputs (`benchmarks/runs/2026-11-17/tiny-tenant-hnsw-pg{16,17}-200k.txt`).
+
 ## [0.2.1] - 2026-11-17
 
 ### Documentation
