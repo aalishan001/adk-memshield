@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- **Agent Skill (`skills/memshield-tenant-isolation/`):** `agentskills.io`-format skill (`SKILL.md`, `references/{setup,identity,anti-patterns}.md`, `scripts/posture_check.py`) that instructs coding agents to wire `adk-memshield` safely (non-bypass role, token-bound identity, owner-applied migrations, iterative scan + scope B-tree, never echoing DSNs). Verified in Antigravity: 10 of 10 trigger tests correct (`benchmarks/runs/2026-11-19/skill-trigger-tests.md`).
+- **Scaling guide (`docs/SCALING.md`):** separates measured numbers (RLS overhead, HNSW plan-cache/iterative-scan/one-row-tenant results, AlloyDB Express ScaNN vs HNSW), what the design supports (transaction-mode pooling, read replicas, dedicated enterprise instances), and what is not yet tested.
+- **AlloyDB Express (PostgreSQL 18.4) verification & ScaNN benchmark:**
+  - `benchmarks/scann_vs_hnsw_rls.py` and raw output `benchmarks/runs/2026-11-19/scann-vs-hnsw-alloydb-50k.txt` (50,000 rows, 0 leaks across all 20 configs; ScaNN beat HNSW for heavy users at 0.890 recall / 0.53 ms and built 2.3x faster, while default ScaNN under RLS dropped to 0.090 recall / 2 of 10 empty for a 30-row light user despite inline filtering).
+  - Test-suite verification on AlloyDB Express PostgreSQL 18.4 (`benchmarks/runs/2026-11-19/pytest-alloydb-express.txt`): 113 passed, 1 skipped, 9 failed (all 9 are admin-fixture assertions that expect `rolsuper=true`, whereas AlloyDB `postgres` has `rolsuper=false, rolbypassrls=false`; 0 product bugs).
+
 ## [0.2.2] - 2026-11-17
 
 ### Documentation

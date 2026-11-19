@@ -180,6 +180,28 @@ Measured with [`benchmarks/tiny_tenant_hnsw.py`](https://github.com/aalishan001/
 
 Raw output: [`tiny-tenant-hnsw-pg16-200k.txt`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/runs/2026-11-17/tiny-tenant-hnsw-pg16-200k.txt) and [`tiny-tenant-hnsw-pg17-200k.txt`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/runs/2026-11-17/tiny-tenant-hnsw-pg17-200k.txt), pgvector 0.8.7. On this data the planner never chose HNSW for a one-row tenant on its own. Without the B-tree it fell back to a sequential scan, which is exact but 25–57 times slower than the B-tree here, and a different data distribution can make it choose HNSW instead, as in the report above. The forced rows show what happens on that path. Even with the tuple cap raised above the table size, the iterative scan found none of the one-row tenants, so raising `hnsw.max_scan_tuples` is not a fix on its own. Nothing leaked in any configuration.
 
+### AlloyDB Express (PostgreSQL 18): ScaNN vs HNSW under RLS
+
+Measured on Google Cloud **AlloyDB Express** (PostgreSQL 18.4, `vector 0.8.7.google-1`, `alloydb_scann 0.1.4`, 1 vCPU) with [`benchmarks/scann_vs_hnsw_rls.py`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/scann_vs_hnsw_rls.py): 50,000 rows in 3 tenants, 384-d cosine embeddings, top-10, 10 queries per user (`light` sees 30 rows; `heavy` owns ~30,000 rows), `rls_only` query shape (no app `WHERE`). Build time: HNSW **38.14 s**, ScaNN (`num_leaves=223`) **16.28 s** (2.3x faster). Raw output: [`benchmarks/runs/2026-11-19/scann-vs-hnsw-alloydb-50k.txt`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/runs/2026-11-19/scann-vs-hnsw-alloydb-50k.txt).
+
+| Configuration | User | Recall@10 | Empty | Leaks | p50 Server Exec | Plan |
+| :--- | :--- | :---: | :---: | :---: | ---: | :--- |
+| Shipped B-tree (no ANN) | light | **1.000** | 0/10 | **0** | 20.68 ms | `Bitmap Heap Scan` (`idx_memories_scope_lookup`) |
+| Shipped B-tree (no ANN) | heavy | **1.000** | 0/10 | **0** | 27.73 ms | `Bitmap Heap Scan` (`idx_memories_scope_lookup`) |
+| HNSW (`iterative_scan=off` / `relaxed_order`) | light | **1.000** | 0/10 | **0** | 15.42 / 15.84 ms | `Bitmap Heap Scan` (`idx_memories_scope_lookup`) |
+| HNSW (`iterative_scan=off` / `relaxed_order`) | heavy | 0.820 / 0.850 | 0/10 | **0** | 0.79 / 0.83 ms | `Index Scan(idx_bench_hnsw)` |
+| ScaNN (`inline_filtering=on`, default) | light | **0.090** | **2/10** | **0** | 1.08–1.13 ms | `Custom Scan + Bitmap Index Scan(idx_memories_scope_lookup)` |
+| ScaNN (`inline_filtering=on`, default) | heavy | **0.890** | 0/10 | **0** | **0.53–0.54 ms** | `Index Scan(idx_bench_scann)` |
+| ScaNN forced (`inline_filtering=off`) | light | 0.090 | 2/10 | **0** | 1.46 ms | `Index Scan(idx_bench_scann)` |
+| ScaNN forced (`inline_filtering=off`) | heavy | 0.890 | 0/10 | **0** | 0.53 ms | `Index Scan(idx_bench_scann)` |
+
+**What this shows:**
+- **Zero leaks in every configuration** across B-tree, HNSW, and ScaNN.
+- For the **heavy user**, ScaNN beat HNSW on build speed (2.3x), recall (**0.890** vs 0.820–0.850), and latency (**0.53 ms** vs 0.79–0.83 ms).
+- For the **light user** (30 rows in 50k, `rls_only`), AlloyDB's ScaNN engaged inline filtering (`Custom Scan + Bitmap Index Scan`) with the shipped B-tree, yet default ScaNN settings (`scann.num_leaves_to_search = 0`, `scann.enable_stable_recall = off`) returned **0.090** recall@10 and **2/10** empty results. With HNSW, PostgreSQL stayed on the B-tree and kept **1.000** recall. Tuning `scann.enable_stable_recall` or `num_leaves_to_search` was not yet tested; measure light-tenant recall before enabling ScaNN under RLS.
+
+See [`docs/SCALING.md`](https://github.com/aalishan001/adk-memshield/blob/main/docs/SCALING.md) for the full scaling guide (what is measured, what the design supports, and what is not yet tested).
+
 **Remaining guidance.**
 
 - The pin stops the switch to a generic plan; it does not stop HNSW post-filtering (see the second case above). A custom plan can still be an HNSW scan with the policy applied afterwards: on PostgreSQL 17 the heavy user still got 9 rows instead of 10 on 8 of 20 searches with the pin, and callers with mid-range visibility (not measured here) can get fewer than `top_k` rows. For the light user the pin restores recall because the planner chooses an exact scan, whose cost grows with the table (RLS-only light p50 42.4 ms pinned vs 21.0 ms unpinned on pg16).
@@ -399,7 +421,26 @@ memory_service = get_service_registry().create_memory_service(
 
 ---
 
+## Agent Skill (`memshield-tenant-isolation`)
+
+This repo ships an [`agentskills.io`](https://agentskills.io)-compatible skill at [`skills/memshield-tenant-isolation/`](https://github.com/aalishan001/adk-memshield/tree/main/skills/memshield-tenant-isolation) (`SKILL.md`, `references/`, and `scripts/posture_check.py`). It instructs coding agents (Antigravity, Gemini CLI, and other Agent Skills-compatible tools) to wire `adk-memshield` safely: non-bypass application role, token-bound identity via `JwtIdentityVerifier` / `HmacIdentityVerifier`, owner-run schema migrations, iterative scan + scope B-tree when adding HNSW, and never printing DSNs or storing tenant secrets in memories.
+
+Install into a workspace:
+
+```bash
+mkdir -p .agents/skills
+cp -r skills/memshield-tenant-isolation .agents/skills/
+```
+
+For tools that read skills from another directory, copy the `memshield-tenant-isolation/` folder into that tool's skills path.
+
+**Trigger verification:** tested in Antigravity across 10 prompts (6 positive across `memshield-tenant-isolation` and `leak-arena-audit`, 4 negative non-triggers): **10 of 10 correct**, with all positive outputs following the safety rules. Raw log: [`benchmarks/runs/2026-11-19/skill-trigger-tests.md`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/runs/2026-11-19/skill-trigger-tests.md).
+
+---
+
 ## Reproducing tests & benchmarks
+
+**Compatibility:** tested on PostgreSQL 16.15 and 17.12 (`pgvector` 0.8.7, 122/122 tests) and verified on Google Cloud **AlloyDB Express** (PostgreSQL 18.4, `vector 0.8.7.google-1`, `alloydb_scann 0.1.4`: 113/122 tests passed verbatim; the remaining 9 are test-fixture assertions that assume `postgres` has `rolsuper=true`, whereas AlloyDB's `alloydbsuperuser` has `rolsuper=false, rolbypassrls=false`; 0 product bugs — see [`benchmarks/runs/2026-11-19/pytest-alloydb-express.txt`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/runs/2026-11-19/pytest-alloydb-express.txt)).
 
 All containers use compose project `adk-memshield`; Postgres 16 is on host port `54329`, the optional Postgres 17 on `54331`.
 
