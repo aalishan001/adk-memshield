@@ -1,0 +1,32 @@
+# AlloyDB Express ScaNN vs HNSW vs B-tree under RLS (rows=50000, top_k=10, queries=10)
+# version: PostgreSQL 18.4 on x86_64-pc-linux-gnu, compiled by Debian clang version 12.0.1, 64-bit
+# extensions: [('alloydb_scann', '0.1.4'), ('vector', '0.8.7.google-1')]
+# scann GUCs: [('scann.allow_blocked_operations', 'off'), ('scann.average_rows_per_partition_multiplier', '3'), ('scann.disable_maint_for_auto_mode', 'off'), ('scann.distributed_index_build_replica_timeout', '600'), ('scann.enable_branch_splits', 'on'), ('scann.enable_centroid_update', 'on'), ('scann.enable_distributed_index_build', 'off'), ('scann.enable_index_maintenance', 'on'), ('scann.enable_inline_filtering', 'on'), ('scann.enable_int8_quantized_query', 'on'), ('scann.enable_maintenance_skip_heuristics', 'on'), ('scann.enable_parallel_index_build', 'on'), ('scann.enable_pca', 'on'), ('scann.enable_stable_recall', 'off'), ('scann.expected_sample_size', '1'), ('scann.idx_mnt_max_levels', '3'), ('scann.maintenance_background_naptime_s', '60'), ('scann.max_background_workers', '1'), ('scann.max_num_prefetch_datasets', '100'), ('scann.min_qualifying_rows', '1000'), ('scann.min_selectivity_percentage', '0'), ('scann.min_split_threshold_child_count', '100'), ('scann.node_split_balance_percentage', '25'), ('scann.node_split_threshold_child_count', '-1'), ('scann.num_distributed_index_build_workers', '-1'), ('scann.num_leaves_to_search', '0'), ('scann.num_parallel_index_build_workers', '-1'), ('scann.num_parallel_index_scan_workers', '-1'), ('scann.num_search_threads', '2'), ('scann.pct_leaves_to_search', '0'), ('scann.pre_reordering_num_neighbors', '-1'), ('scann.skip_maintenance_mutations_threshold', '100')]
+# load_s: 138.72
+# hnsw_build_s: 38.14
+# scann_build_s (num_leaves=223): 16.28
+
+| Configuration | Shape | User | Recall@10 | Empty | Leaks | p50 Server Exec | Plan |
+| :--- | :--- | :--- | :---: | :---: | :---: | ---: | :--- |
+| Shipped B-tree (no ANN) | rls_only | light | 1.000 | 0/10 | 0 | 20.68 ms | `Bitmap Heap Scan + Bitmap Index Scan(idx_memories_scope_lookup)` |
+| Shipped B-tree (no ANN) | rls_only | heavy | 1.000 | 0/10 | 0 | 27.73 ms | `Bitmap Heap Scan + Bitmap Index Scan(idx_memories_scope_lookup)` |
+| Shipped B-tree (no ANN) | default | light | 1.000 | 0/10 | 0 | 13.60 ms | `Bitmap Heap Scan + Bitmap Index Scan(idx_memories_scope_lookup)` |
+| Shipped B-tree (no ANN) | default | heavy | 1.000 | 0/10 | 0 | 26.95 ms | `Bitmap Heap Scan + Bitmap Index Scan(idx_memories_scope_lookup)` |
+| HNSW (iterative_scan=off) | rls_only | light | 1.000 | 0/10 | 0 | 15.42 ms | `Bitmap Heap Scan + Bitmap Index Scan(idx_memories_scope_lookup)` |
+| HNSW (iterative_scan=off) | rls_only | heavy | 0.820 | 0/10 | 0 | 0.79 ms | `Index Scan(idx_bench_hnsw)` |
+| HNSW (iterative_scan=relaxed_order) | rls_only | light | 1.000 | 0/10 | 0 | 15.84 ms | `Bitmap Heap Scan + Bitmap Index Scan(idx_memories_scope_lookup)` |
+| HNSW (iterative_scan=relaxed_order) | rls_only | heavy | 0.850 | 0/10 | 0 | 0.83 ms | `Index Scan(idx_bench_hnsw)` |
+| HNSW forced (iterative_scan=off) | rls_only | light | 1.000 | 0/10 | 0 | 14.18 ms | `Index Scan(idx_memories_scope_lookup)` |
+| HNSW forced (iterative_scan=off) | rls_only | heavy | 0.820 | 0/10 | 0 | 0.80 ms | `Index Scan(idx_bench_hnsw)` |
+| HNSW forced (iterative_scan=relaxed_order) | rls_only | light | 1.000 | 0/10 | 0 | 14.80 ms | `Index Scan(idx_memories_scope_lookup)` |
+| HNSW forced (iterative_scan=relaxed_order) | rls_only | heavy | 0.850 | 0/10 | 0 | 0.91 ms | `Index Scan(idx_bench_hnsw)` |
+| ScaNN (default planner) | rls_only | light | 0.090 | 2/10 | 0 | 1.13 ms | `Custom Scan + Bitmap Index Scan(idx_memories_scope_lookup)` |
+| ScaNN (default planner) | rls_only | heavy | 0.890 | 0/10 | 0 | 0.54 ms | `Index Scan(idx_bench_scann)` |
+| ScaNN forced (inline_filtering=off) | rls_only | light | 0.090 | 2/10 | 0 | 1.46 ms | `Index Scan(idx_bench_scann)` |
+| ScaNN forced (inline_filtering=off) | rls_only | heavy | 0.890 | 0/10 | 0 | 0.53 ms | `Index Scan(idx_bench_scann)` |
+| ScaNN (inline_filtering=on) | rls_only | light | 0.090 | 2/10 | 0 | 1.08 ms | `Custom Scan + Bitmap Index Scan(idx_memories_scope_lookup)` |
+| ScaNN (inline_filtering=on) | rls_only | heavy | 0.890 | 0/10 | 0 | 0.53 ms | `Index Scan(idx_bench_scann)` |
+| ScaNN forced (inline_filtering=on) | rls_only | light | 0.090 | 2/10 | 0 | 1.26 ms | `Custom Scan + Bitmap Index Scan(idx_memories_scope_lookup)` |
+| ScaNN forced (inline_filtering=on) | rls_only | heavy | 0.890 | 0/10 | 0 | 0.56 ms | `Index Scan(idx_bench_scann)` |
+
+# dropped temporary database memshield_bench_scann
