@@ -440,7 +440,7 @@ For tools that read skills from another directory, copy the `memshield-tenant-is
 
 ## Reproducing tests & benchmarks
 
-**Compatibility:** tested on PostgreSQL 16.15 and 17.12 (`pgvector` 0.8.7, 122/122 tests) and verified on Google Cloud **AlloyDB Express** (PostgreSQL 18.4, `vector 0.8.7.google-1`, `alloydb_scann 0.1.4`: 113/122 tests passed verbatim; the remaining 9 are test-fixture assertions that assume `postgres` has `rolsuper=true`, whereas AlloyDB's `alloydbsuperuser` has `rolsuper=false, rolbypassrls=false`; 0 product bugs — see [`benchmarks/runs/2026-11-19/pytest-alloydb-express.txt`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/runs/2026-11-19/pytest-alloydb-express.txt)).
+**Compatibility:** tested on PostgreSQL 16.15 and 17.12 (`pgvector` 0.8.7, 122 of 122 tests) and verified on Google Cloud **AlloyDB Express** (PostgreSQL 18.4, `vector 0.8.7.google-1`, `alloydb_scann 0.1.4`, `asia-southeast1` on synthetic data): 113 of 122 tests pass on AlloyDB Express (PG 18.4); the 9 failures are test fixtures that expect a true superuser, which AlloyDB doesn't hand out (0 product bugs — see [`benchmarks/runs/2026-11-19/pytest-alloydb-express.txt`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/runs/2026-11-19/pytest-alloydb-express.txt)). Production AlloyDB runs in `asia-south1` (Mumbai) where regional residency is required.
 
 All containers use compose project `adk-memshield`; Postgres 16 is on host port `54329`, the optional Postgres 17 on `54331`.
 
