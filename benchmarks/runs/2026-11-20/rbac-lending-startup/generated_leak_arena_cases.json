@@ -1,0 +1,194 @@
+[
+  {
+    "case_id": "RBAC_CLR_collections_cannot_read_admin",
+    "type": "clearance_isolation",
+    "caller_role": "collections",
+    "caller_clearance": 2,
+    "caller_compartments": [
+      "collections"
+    ],
+    "target_memory_min_clearance": 4,
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "collections (clearance 2) must read 0 tenant_shared rows labelled clearance 4 (admin)."
+  },
+  {
+    "case_id": "RBAC_CLR_compliance_cannot_read_admin",
+    "type": "clearance_isolation",
+    "caller_role": "compliance",
+    "caller_clearance": 3,
+    "caller_compartments": [
+      "compliance"
+    ],
+    "target_memory_min_clearance": 4,
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "compliance (clearance 3) must read 0 tenant_shared rows labelled clearance 4 (admin)."
+  },
+  {
+    "case_id": "RBAC_CLR_support_agent_cannot_read_admin",
+    "type": "clearance_isolation",
+    "caller_role": "support_agent",
+    "caller_clearance": 1,
+    "caller_compartments": [
+      "customer_support"
+    ],
+    "target_memory_min_clearance": 4,
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "support_agent (clearance 1) must read 0 tenant_shared rows labelled clearance 4 (admin)."
+  },
+  {
+    "case_id": "RBAC_CLR_support_lead_cannot_read_admin",
+    "type": "clearance_isolation",
+    "caller_role": "support_lead",
+    "caller_clearance": 2,
+    "caller_compartments": [
+      "customer_support"
+    ],
+    "target_memory_min_clearance": 4,
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "support_lead (clearance 2) must read 0 tenant_shared rows labelled clearance 4 (admin)."
+  },
+  {
+    "case_id": "RBAC_CLR_collections_cannot_read_compliance",
+    "type": "clearance_isolation",
+    "caller_role": "collections",
+    "caller_clearance": 2,
+    "caller_compartments": [
+      "collections"
+    ],
+    "target_memory_min_clearance": 3,
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "collections (clearance 2) must read 0 tenant_shared rows labelled clearance 3 (compliance)."
+  },
+  {
+    "case_id": "RBAC_COMP_collections_cannot_read_compliance",
+    "type": "compartment_isolation",
+    "caller_role": "collections",
+    "caller_clearance": 2,
+    "caller_compartments": [
+      "collections"
+    ],
+    "target_memory_compartments": [
+      "compliance"
+    ],
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "collections (['collections']) must read 0 tenant_shared rows tagged ['compliance'] (compliance)."
+  },
+  {
+    "case_id": "RBAC_CLR_support_agent_cannot_read_collections",
+    "type": "clearance_isolation",
+    "caller_role": "support_agent",
+    "caller_clearance": 1,
+    "caller_compartments": [
+      "customer_support"
+    ],
+    "target_memory_min_clearance": 2,
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "support_agent (clearance 1) must read 0 tenant_shared rows labelled clearance 2 (collections)."
+  },
+  {
+    "case_id": "RBAC_COMP_collections_cannot_read_support_agent",
+    "type": "compartment_isolation",
+    "caller_role": "collections",
+    "caller_clearance": 2,
+    "caller_compartments": [
+      "collections"
+    ],
+    "target_memory_compartments": [
+      "customer_support"
+    ],
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "collections (['collections']) must read 0 tenant_shared rows tagged ['customer_support'] (support_agent)."
+  },
+  {
+    "case_id": "RBAC_COMP_collections_cannot_read_support_lead",
+    "type": "compartment_isolation",
+    "caller_role": "collections",
+    "caller_clearance": 2,
+    "caller_compartments": [
+      "collections"
+    ],
+    "target_memory_compartments": [
+      "customer_support"
+    ],
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "collections (['collections']) must read 0 tenant_shared rows tagged ['customer_support'] (support_lead)."
+  },
+  {
+    "case_id": "RBAC_CLR_support_agent_cannot_read_compliance",
+    "type": "clearance_isolation",
+    "caller_role": "support_agent",
+    "caller_clearance": 1,
+    "caller_compartments": [
+      "customer_support"
+    ],
+    "target_memory_min_clearance": 3,
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "support_agent (clearance 1) must read 0 tenant_shared rows labelled clearance 3 (compliance)."
+  },
+  {
+    "case_id": "RBAC_COMP_compliance_cannot_read_support_agent",
+    "type": "compartment_isolation",
+    "caller_role": "compliance",
+    "caller_clearance": 3,
+    "caller_compartments": [
+      "compliance"
+    ],
+    "target_memory_compartments": [
+      "customer_support"
+    ],
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "compliance (['compliance']) must read 0 tenant_shared rows tagged ['customer_support'] (support_agent)."
+  },
+  {
+    "case_id": "RBAC_CLR_support_lead_cannot_read_compliance",
+    "type": "clearance_isolation",
+    "caller_role": "support_lead",
+    "caller_clearance": 2,
+    "caller_compartments": [
+      "customer_support"
+    ],
+    "target_memory_min_clearance": 3,
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "support_lead (clearance 2) must read 0 tenant_shared rows labelled clearance 3 (compliance)."
+  },
+  {
+    "case_id": "RBAC_COMP_compliance_cannot_read_support_lead",
+    "type": "compartment_isolation",
+    "caller_role": "compliance",
+    "caller_clearance": 3,
+    "caller_compartments": [
+      "compliance"
+    ],
+    "target_memory_compartments": [
+      "customer_support"
+    ],
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "compliance (['compliance']) must read 0 tenant_shared rows tagged ['customer_support'] (support_lead)."
+  },
+  {
+    "case_id": "RBAC_CLR_support_agent_cannot_read_support_lead",
+    "type": "clearance_isolation",
+    "caller_role": "support_agent",
+    "caller_clearance": 1,
+    "caller_compartments": [
+      "customer_support"
+    ],
+    "target_memory_min_clearance": 2,
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "support_agent (clearance 1) must read 0 tenant_shared rows labelled clearance 2 (support_lead)."
+  }
+]

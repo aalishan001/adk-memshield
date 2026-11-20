@@ -1,0 +1,35 @@
+schema_version: adk-memshield-rbac-mapping/v1
+source: idp_groups_export.json
+requires_human_approval: true
+identity_fields:
+  user_id: sub
+  tenant_id: tenant
+  clearance: clearance
+  compartments: groups
+roles:
+  ciso:
+    clearance: 5
+    compartments: [role-ciso]
+  compliance_officer:
+    clearance: 3
+    compartments: [dept-legal-audit]
+  finance_analyst:
+    clearance: 2
+    compartments: [dept-treasury]
+  support_agent:
+    clearance: 1
+    compartments: [dept-support]
+  underwriter:
+    clearance: 2
+    compartments: [dept-underwriting]
+group_to_compartment:
+  "okta-dept-legal-audit": dept-legal-audit
+  "okta-dept-support": dept-support
+  "okta-dept-treasury": dept-treasury
+  "okta-dept-underwriting": dept-underwriting
+  "okta-role-ciso": role-ciso
+unmappable_items:
+  - source: "idp_groups_export.json:group:okta-dept-legal-audit"
+    kind: attribute_condition_rule
+    detail: "only if mfa_amr includes hardware_key"
+    action_required: "Human decision required."

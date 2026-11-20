@@ -1,0 +1,43 @@
+schema_version: adk-memshield-rbac-mapping/v1
+source: lending_startup_rbac.json
+requires_human_approval: true
+identity_fields:
+  user_id: sub
+  tenant_id: org_id
+  clearance: clearance_tier
+  compartments: dept_compartments
+roles:
+  admin:
+    clearance: 4
+    compartments: [collections, compliance, customer_support]
+  collections:
+    clearance: 2
+    compartments: [collections]
+  compliance:
+    clearance: 3
+    compartments: [compliance]
+  support_agent:
+    clearance: 1
+    compartments: [customer_support]
+  support_lead:
+    clearance: 2
+    compartments: [customer_support]
+group_to_compartment:
+  {}
+unmappable_items:
+  - source: "lending_startup_rbac.json:support_agent.time_restrictions"
+    kind: time_restrictions
+    detail: "Access allowed only during IST 08:00-20:00 shift hours"
+    action_required: "Human decision required; cannot be represented directly in tenant/clearance/compartment RLS."
+  - source: "lending_startup_rbac.json:support_lead.conditions"
+    kind: conditions
+    detail: "approve_fee_waiver only when waiver_amount < 5000 INR"
+    action_required: "Human decision required; cannot be represented directly in tenant/clearance/compartment RLS."
+  - source: "lending_startup_rbac.json:collections.record_acls"
+    kind: record_acls
+    detail: "per-loan_id assignment required for active NPA accounts"
+    action_required: "Human decision required; cannot be represented directly in tenant/clearance/compartment RLS."
+  - source: "lending_startup_rbac.json:compliance.deny_rules"
+    kind: deny_rules
+    detail: "explicit deny on marketing_campaigns drafts"
+    action_required: "Human decision required; cannot be represented directly in tenant/clearance/compartment RLS."

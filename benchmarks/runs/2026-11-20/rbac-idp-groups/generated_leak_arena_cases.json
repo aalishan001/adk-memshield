@@ -1,0 +1,269 @@
+[
+  {
+    "case_id": "RBAC_CLR_compliance_officer_cannot_read_ciso",
+    "type": "clearance_isolation",
+    "caller_role": "compliance_officer",
+    "caller_clearance": 3,
+    "caller_compartments": [
+      "dept-legal-audit"
+    ],
+    "target_memory_min_clearance": 5,
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "compliance_officer (clearance 3) must read 0 tenant_shared rows labelled clearance 5 (ciso)."
+  },
+  {
+    "case_id": "RBAC_COMP_ciso_cannot_read_compliance_officer",
+    "type": "compartment_isolation",
+    "caller_role": "ciso",
+    "caller_clearance": 5,
+    "caller_compartments": [
+      "role-ciso"
+    ],
+    "target_memory_compartments": [
+      "dept-legal-audit"
+    ],
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "ciso (['role-ciso']) must read 0 tenant_shared rows tagged ['dept-legal-audit'] (compliance_officer)."
+  },
+  {
+    "case_id": "RBAC_CLR_finance_analyst_cannot_read_ciso",
+    "type": "clearance_isolation",
+    "caller_role": "finance_analyst",
+    "caller_clearance": 2,
+    "caller_compartments": [
+      "dept-treasury"
+    ],
+    "target_memory_min_clearance": 5,
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "finance_analyst (clearance 2) must read 0 tenant_shared rows labelled clearance 5 (ciso)."
+  },
+  {
+    "case_id": "RBAC_COMP_ciso_cannot_read_finance_analyst",
+    "type": "compartment_isolation",
+    "caller_role": "ciso",
+    "caller_clearance": 5,
+    "caller_compartments": [
+      "role-ciso"
+    ],
+    "target_memory_compartments": [
+      "dept-treasury"
+    ],
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "ciso (['role-ciso']) must read 0 tenant_shared rows tagged ['dept-treasury'] (finance_analyst)."
+  },
+  {
+    "case_id": "RBAC_CLR_support_agent_cannot_read_ciso",
+    "type": "clearance_isolation",
+    "caller_role": "support_agent",
+    "caller_clearance": 1,
+    "caller_compartments": [
+      "dept-support"
+    ],
+    "target_memory_min_clearance": 5,
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "support_agent (clearance 1) must read 0 tenant_shared rows labelled clearance 5 (ciso)."
+  },
+  {
+    "case_id": "RBAC_COMP_ciso_cannot_read_support_agent",
+    "type": "compartment_isolation",
+    "caller_role": "ciso",
+    "caller_clearance": 5,
+    "caller_compartments": [
+      "role-ciso"
+    ],
+    "target_memory_compartments": [
+      "dept-support"
+    ],
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "ciso (['role-ciso']) must read 0 tenant_shared rows tagged ['dept-support'] (support_agent)."
+  },
+  {
+    "case_id": "RBAC_CLR_underwriter_cannot_read_ciso",
+    "type": "clearance_isolation",
+    "caller_role": "underwriter",
+    "caller_clearance": 2,
+    "caller_compartments": [
+      "dept-underwriting"
+    ],
+    "target_memory_min_clearance": 5,
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "underwriter (clearance 2) must read 0 tenant_shared rows labelled clearance 5 (ciso)."
+  },
+  {
+    "case_id": "RBAC_COMP_ciso_cannot_read_underwriter",
+    "type": "compartment_isolation",
+    "caller_role": "ciso",
+    "caller_clearance": 5,
+    "caller_compartments": [
+      "role-ciso"
+    ],
+    "target_memory_compartments": [
+      "dept-underwriting"
+    ],
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "ciso (['role-ciso']) must read 0 tenant_shared rows tagged ['dept-underwriting'] (underwriter)."
+  },
+  {
+    "case_id": "RBAC_CLR_finance_analyst_cannot_read_compliance_officer",
+    "type": "clearance_isolation",
+    "caller_role": "finance_analyst",
+    "caller_clearance": 2,
+    "caller_compartments": [
+      "dept-treasury"
+    ],
+    "target_memory_min_clearance": 3,
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "finance_analyst (clearance 2) must read 0 tenant_shared rows labelled clearance 3 (compliance_officer)."
+  },
+  {
+    "case_id": "RBAC_COMP_compliance_officer_cannot_read_finance_analyst",
+    "type": "compartment_isolation",
+    "caller_role": "compliance_officer",
+    "caller_clearance": 3,
+    "caller_compartments": [
+      "dept-legal-audit"
+    ],
+    "target_memory_compartments": [
+      "dept-treasury"
+    ],
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "compliance_officer (['dept-legal-audit']) must read 0 tenant_shared rows tagged ['dept-treasury'] (finance_analyst)."
+  },
+  {
+    "case_id": "RBAC_CLR_support_agent_cannot_read_compliance_officer",
+    "type": "clearance_isolation",
+    "caller_role": "support_agent",
+    "caller_clearance": 1,
+    "caller_compartments": [
+      "dept-support"
+    ],
+    "target_memory_min_clearance": 3,
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "support_agent (clearance 1) must read 0 tenant_shared rows labelled clearance 3 (compliance_officer)."
+  },
+  {
+    "case_id": "RBAC_COMP_compliance_officer_cannot_read_support_agent",
+    "type": "compartment_isolation",
+    "caller_role": "compliance_officer",
+    "caller_clearance": 3,
+    "caller_compartments": [
+      "dept-legal-audit"
+    ],
+    "target_memory_compartments": [
+      "dept-support"
+    ],
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "compliance_officer (['dept-legal-audit']) must read 0 tenant_shared rows tagged ['dept-support'] (support_agent)."
+  },
+  {
+    "case_id": "RBAC_CLR_underwriter_cannot_read_compliance_officer",
+    "type": "clearance_isolation",
+    "caller_role": "underwriter",
+    "caller_clearance": 2,
+    "caller_compartments": [
+      "dept-underwriting"
+    ],
+    "target_memory_min_clearance": 3,
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "underwriter (clearance 2) must read 0 tenant_shared rows labelled clearance 3 (compliance_officer)."
+  },
+  {
+    "case_id": "RBAC_COMP_compliance_officer_cannot_read_underwriter",
+    "type": "compartment_isolation",
+    "caller_role": "compliance_officer",
+    "caller_clearance": 3,
+    "caller_compartments": [
+      "dept-legal-audit"
+    ],
+    "target_memory_compartments": [
+      "dept-underwriting"
+    ],
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "compliance_officer (['dept-legal-audit']) must read 0 tenant_shared rows tagged ['dept-underwriting'] (underwriter)."
+  },
+  {
+    "case_id": "RBAC_CLR_support_agent_cannot_read_finance_analyst",
+    "type": "clearance_isolation",
+    "caller_role": "support_agent",
+    "caller_clearance": 1,
+    "caller_compartments": [
+      "dept-support"
+    ],
+    "target_memory_min_clearance": 2,
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "support_agent (clearance 1) must read 0 tenant_shared rows labelled clearance 2 (finance_analyst)."
+  },
+  {
+    "case_id": "RBAC_COMP_finance_analyst_cannot_read_support_agent",
+    "type": "compartment_isolation",
+    "caller_role": "finance_analyst",
+    "caller_clearance": 2,
+    "caller_compartments": [
+      "dept-treasury"
+    ],
+    "target_memory_compartments": [
+      "dept-support"
+    ],
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "finance_analyst (['dept-treasury']) must read 0 tenant_shared rows tagged ['dept-support'] (support_agent)."
+  },
+  {
+    "case_id": "RBAC_COMP_finance_analyst_cannot_read_underwriter",
+    "type": "compartment_isolation",
+    "caller_role": "finance_analyst",
+    "caller_clearance": 2,
+    "caller_compartments": [
+      "dept-treasury"
+    ],
+    "target_memory_compartments": [
+      "dept-underwriting"
+    ],
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "finance_analyst (['dept-treasury']) must read 0 tenant_shared rows tagged ['dept-underwriting'] (underwriter)."
+  },
+  {
+    "case_id": "RBAC_CLR_support_agent_cannot_read_underwriter",
+    "type": "clearance_isolation",
+    "caller_role": "support_agent",
+    "caller_clearance": 1,
+    "caller_compartments": [
+      "dept-support"
+    ],
+    "target_memory_min_clearance": 2,
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "support_agent (clearance 1) must read 0 tenant_shared rows labelled clearance 2 (underwriter)."
+  },
+  {
+    "case_id": "RBAC_COMP_support_agent_cannot_read_underwriter",
+    "type": "compartment_isolation",
+    "caller_role": "support_agent",
+    "caller_clearance": 1,
+    "caller_compartments": [
+      "dept-support"
+    ],
+    "target_memory_compartments": [
+      "dept-underwriting"
+    ],
+    "target_memory_scope": "tenant_shared",
+    "expected_leaked_rows": 0,
+    "assertion": "support_agent (['dept-support']) must read 0 tenant_shared rows tagged ['dept-underwriting'] (underwriter)."
+  }
+]

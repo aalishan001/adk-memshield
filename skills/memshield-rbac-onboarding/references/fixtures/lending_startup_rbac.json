@@ -1,0 +1,44 @@
+{
+  "organization": "Acme Lending India (fictional fixture)",
+  "claim_names": {
+    "tenant_id": "org_id",
+    "clearance": "clearance_tier",
+    "compartments": "dept_compartments"
+  },
+  "roles": [
+    {
+      "name": "support_agent",
+      "department": "customer_support",
+      "clearance": 1,
+      "permissions": ["read_own_tickets", "read_shared_faq"],
+      "time_restrictions": ["Access allowed only during IST 08:00-20:00 shift hours"]
+    },
+    {
+      "name": "support_lead",
+      "department": "customer_support",
+      "clearance": 2,
+      "permissions": ["read_team_escalations", "approve_fee_waiver"],
+      "conditions": ["approve_fee_waiver only when waiver_amount < 5000 INR"]
+    },
+    {
+      "name": "collections",
+      "department": "collections",
+      "clearance": 2,
+      "permissions": ["read_delinquency_notes"],
+      "record_acls": ["per-loan_id assignment required for active NPA accounts"]
+    },
+    {
+      "name": "compliance",
+      "department": "compliance",
+      "clearance": 3,
+      "permissions": ["read_kyc_audits", "read_dpdp_logs"],
+      "deny_rules": ["explicit deny on marketing_campaigns drafts"]
+    },
+    {
+      "name": "admin",
+      "departments": ["compliance", "customer_support", "collections"],
+      "clearance": 4,
+      "permissions": ["manage_tenant_policies"]
+    }
+  ]
+}

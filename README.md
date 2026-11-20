@@ -8,6 +8,11 @@
 [![CI](https://github.com/aalishan001/adk-memshield/actions/workflows/ci.yml/badge.svg)](https://github.com/aalishan001/adk-memshield/actions/workflows/ci.yml)
 [![Google ADK](https://img.shields.io/badge/google--adk-%3E%3D2.12-4285F4.svg)](https://github.com/google/adk-python)
 
+### Live Demos & Evidence
+- **Live Interactive Red-Team Console (`adk-leak-arena`):** https://adk-leak-arena-268336845218.asia-southeast1.run.app (Cloud Run + AlloyDB Express PG 18.4, `39/40 -> 0/40` leaks, `100%` recall, WCAG 2.2 AA)
+- **Live Continuous Monitor (`memshield-monitor`):** https://memshield-monitor-268336845218.asia-southeast1.run.app (hourly canary/RLS posture checks, Google Cloud Monitoring alerts, DPDP operational evidence reports, WCAG 2.2 AA)
+- **Evidence & Skills:** [`benchmarks/runs/2026-11-20/`](benchmarks/runs/2026-11-20/) (113/122 AlloyDB Express PG 18.4, 50k ScaNN, 15/15 Antigravity skill trigger tests) · [`skills/`](skills/) (`memshield-tenant-isolation`, `leak-arena-audit`, `memshield-rbac-onboarding`)
+
 ---
 
 ## What changed in 0.2.0
@@ -421,20 +426,22 @@ memory_service = get_service_registry().create_memory_service(
 
 ---
 
-## Agent Skill (`memshield-tenant-isolation`)
+## Agent Skills (`memshield-tenant-isolation` & `memshield-rbac-onboarding`)
 
-This repo ships an [`agentskills.io`](https://agentskills.io)-compatible skill at [`skills/memshield-tenant-isolation/`](https://github.com/aalishan001/adk-memshield/tree/main/skills/memshield-tenant-isolation) (`SKILL.md`, `references/`, and `scripts/posture_check.py`). It instructs coding agents (Antigravity, Gemini CLI, and other Agent Skills-compatible tools) to wire `adk-memshield` safely: non-bypass application role, token-bound identity via `JwtIdentityVerifier` / `HmacIdentityVerifier`, owner-run schema migrations, iterative scan + scope B-tree when adding HNSW, and never printing DSNs or storing tenant secrets in memories.
+This repo ships two [`agentskills.io`](https://agentskills.io)-compatible skills:
+1. [`skills/memshield-tenant-isolation/`](https://github.com/aalishan001/adk-memshield/tree/main/skills/memshield-tenant-isolation) (`SKILL.md`, `references/`, `scripts/posture_check.py`): instructs coding agents (Antigravity, Gemini CLI, and other Agent Skills-compatible tools) to wire `adk-memshield` safely — non-bypass application role, token-bound identity via `JwtIdentityVerifier` / `HmacIdentityVerifier`, owner-run schema migrations, iterative scan + scope B-tree when adding HNSW, and never printing DSNs or storing tenant secrets in memories.
+2. [`skills/memshield-rbac-onboarding/`](https://github.com/aalishan001/adk-memshield/tree/main/skills/memshield-rbac-onboarding) (`SKILL.md`, deterministic `scripts/map_rbac.py`, fixtures): reads existing roles YAML/JSON, IdP group claims (Okta, Entra ID, Google Groups), roles CSVs, or Casbin policy CSVs **read-only**, proposes `memshield-mapping.yaml` (mapping onto real `tenant_id`, `user_id`, `clearance` 1–5, and `compartments` fields), emits a `JwtIdentityVerifier` snippet, flags unmappable rules (attribute conditions, explicit deny rules, time restrictions, per-record ACLs) for human approval, and generates pairwise isolation test cases.
 
 Install into a workspace:
 
 ```bash
 mkdir -p .agents/skills
-cp -r skills/memshield-tenant-isolation .agents/skills/
+cp -r skills/memshield-tenant-isolation skills/memshield-rbac-onboarding .agents/skills/
 ```
 
-For tools that read skills from another directory, copy the `memshield-tenant-isolation/` folder into that tool's skills path.
+For tools that read skills from another directory, copy the skill folders into that tool's skills path.
 
-**Trigger verification:** tested in Antigravity across 10 prompts (6 positive across `memshield-tenant-isolation` and `leak-arena-audit`, 4 negative non-triggers): **10 of 10 correct**, with all positive outputs following the safety rules. Raw log: [`benchmarks/runs/2026-11-19/skill-trigger-tests.md`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/runs/2026-11-19/skill-trigger-tests.md).
+**Trigger verification:** tested in Antigravity across 15 prompts total (10 for `memshield-tenant-isolation` + `leak-arena-audit`: [`benchmarks/runs/2026-11-19/skill-trigger-tests.md`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/runs/2026-11-19/skill-trigger-tests.md); 5 for `memshield-rbac-onboarding`: [`benchmarks/runs/2026-11-20/rbac-skill-trigger-tests.md`](https://github.com/aalishan001/adk-memshield/blob/main/benchmarks/runs/2026-11-20/rbac-skill-trigger-tests.md)): **15 of 15 correct**, with all positive outputs following the safety rules.
 
 ---
 

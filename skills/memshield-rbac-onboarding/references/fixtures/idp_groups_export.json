@@ -1,0 +1,15 @@
+{
+  "provider": "Okta / Google Groups (fictional fixture)",
+  "claim_names": {
+    "tenant_id": "tenant",
+    "clearance": "clearance",
+    "compartments": "groups"
+  },
+  "groups": [
+    {"name": "okta-dept-support", "role": "support_agent", "clearance": 1},
+    {"name": "okta-dept-underwriting", "role": "underwriter", "clearance": 2},
+    {"name": "okta-dept-treasury", "role": "finance_analyst", "clearance": 2},
+    {"name": "okta-dept-legal-audit", "role": "compliance_officer", "clearance": 3, "condition": "only if mfa_amr includes hardware_key"},
+    {"name": "okta-role-ciso", "role": "ciso", "clearance": 5}
+  ]
+}
